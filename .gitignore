@@ -1,0 +1,29 @@
+# --- Go ---
+*.exe
+*.test
+*.out
+bin/
+vendor/
+
+# --- eBPF ---
+ebpf/build/
+ebpf/vmlinux.h
+
+# --- 前端 ---
+node_modules/
+dist/
+build/
+
+# --- 环境与密钥 ---
+.env
+.env.local
+*.local
+
+# --- 编辑器 ---
+.vscode/
+.idea/
+*.swp
+
+# --- 日志 ---
+*.log
+logs/
