@@ -16,9 +16,10 @@ func TestParseExecEvent(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[20:24], 1000)
 	binary.LittleEndian.PutUint32(raw[24:28], 1000)
 	// payload 起始于 64
-	copy(raw[64:80], "bash")
-	copy(raw[80:336], "ls -la")
-	copy(raw[336:], "PATH=/usr/bin")
+	copy(raw[64:80], "bash")            // comm
+	copy(raw[80:112], "ls")             // argv[0]
+	copy(raw[112:144], "-la")           // argv[1]
+	copy(raw[336:368], "PATH=/usr/bin") // envp[0]
 
 	e, err := parseEvent(raw)
 	if err != nil {
@@ -27,11 +28,14 @@ func TestParseExecEvent(t *testing.T) {
 	if e.Header.Type != EventTypeExec || e.Header.Pid != 100 || e.Exec == nil {
 		t.Fatalf("EXEC 事件解析错误: %+v", e.Header)
 	}
-	if got := string(bytes.TrimRight(e.Exec.Argv[:], "\x00")); got != "ls -la" {
-		t.Fatalf("argv = %q，期望 ls -la", got)
+	if got := string(bytes.TrimRight(e.Exec.Argv[0][:], "\x00")); got != "ls" {
+		t.Fatalf("argv[0] = %q，期望 ls", got)
 	}
-	if got := string(bytes.TrimRight(e.Exec.Envp[:], "\x00")); got != "PATH=/usr/bin" {
-		t.Fatalf("envp = %q，期望 PATH=/usr/bin", got)
+	if got := string(bytes.TrimRight(e.Exec.Argv[1][:], "\x00")); got != "-la" {
+		t.Fatalf("argv[1] = %q，期望 -la", got)
+	}
+	if got := string(bytes.TrimRight(e.Exec.Envp[0][:], "\x00")); got != "PATH=/usr/bin" {
+		t.Fatalf("envp[0] = %q，期望 PATH=/usr/bin", got)
 	}
 }
 

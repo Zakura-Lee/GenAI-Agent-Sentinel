@@ -44,11 +44,16 @@ struct adr_event_header {
 #define ADR_PIPE_DATA_LEN 128
 #define ADR_NAME_LEN 256
 
+// 参数槽位：每个 argv/envp 元素读入固定大小槽，避免动态偏移导致 verifier 无法追踪边界。
+#define ARGV_SLOTS 8
+#define ENVP_SLOTS 16
+#define SLOT_SIZE  32
+
 // adr_exec_payload EXEC 事件 payload
 struct adr_exec_payload {
 	char comm[ADR_COMM_LEN];
-	char argv[ADR_ARGV_LEN];
-	char envp[ADR_ENVP_LEN];
+	char argv[ARGV_SLOTS][SLOT_SIZE];
+	char envp[ENVP_SLOTS][SLOT_SIZE];
 };
 
 // adr_pipe_payload PIPE 事件 payload

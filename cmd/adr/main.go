@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
 )
@@ -85,7 +86,7 @@ func printExec(e *egress.Event) {
 	p := e.Exec
 	fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
 		e.Header.Pid, e.Header.Ppid, e.Header.Uid, e.Header.Gid,
-		cstr(p.Comm[:]), cstr(p.Argv[:]), cstr(p.Envp[:]))
+		cstr(p.Comm[:]), joinSlots(p.Argv[:]), joinSlots(p.Envp[:]))
 }
 
 // printPipe 打印 PIPE 事件。
@@ -115,4 +116,15 @@ func cstr(b []byte) string {
 		return string(b[:i])
 	}
 	return string(b)
+}
+
+// joinSlots 将固定槽位数组拼接为空格分隔的字符串。
+func joinSlots(slots [][32]byte) string {
+	parts := make([]string, 0, len(slots))
+	for _, s := range slots {
+		if str := cstr(s[:]); str != "" {
+			parts = append(parts, str)
+		}
+	}
+	return strings.Join(parts, " ")
 }

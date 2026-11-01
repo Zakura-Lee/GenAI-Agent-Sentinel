@@ -47,33 +47,15 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 		__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 }
 
-// read_strvec 读取用户态 char** 字符串数组并拼接进 dst，返回写入字节数（不含结尾 '\0'）。
-// 用 #pragma unroll 强制展开 + 嵌套 if 替代 break，让 verifier 能精确追踪 off 边界。
-static __always_inline long read_strvec(char *dst, long size, const char **vec)
+// read_slots 将用户态 char** 数组逐个读入固定大小槽位（verifier 友好的固定偏移）。
+static __always_inline void read_slots(char (*dst)[SLOT_SIZE], int max_slots, const char **vec)
 {
-	long off = 0;
-
 #pragma unroll
-	for (int i = 0; i < MAX_VEC; i++) {
+	for (int i = 0; i < max_slots; i++) {
 		const char *p = NULL;
-
-		if (off < size - 1) {
-			if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) == 0 && p) {
-				if (i > 0) {
-					dst[off] = ' ';
-					off++;
-				}
-				long n = bpf_probe_read_user_str(dst + off, size - off, p);
-				if (n > 0)
-					off += n - 1; // 返回值含结尾 '\0'
-			}
-		}
+		if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) == 0 && p)
+			bpf_probe_read_user_str(dst[i], SLOT_SIZE, p);
 	}
-
-	if (off >= size)
-		off = size - 1;
-	dst[off] = '\0';
-	return off;
 }
 
 // handle_pipe_io 判定 file 是否为 pipe，若是则上报 PIPE 事件。dir: 0=读，1=写。
@@ -127,8 +109,8 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 
 	payload = (struct adr_exec_payload *)((void *)hdr + sizeof(*hdr));
 	bpf_get_current_comm(payload->comm, sizeof(payload->comm));
-	read_strvec(payload->argv, sizeof(payload->argv), (const char **)ctx->args[1]);
-	read_strvec(payload->envp, sizeof(payload->envp), (const char **)ctx->args[2]);
+	read_slots(payload->argv, ARGV_SLOTS, (const char **)ctx->args[1]);
+	read_slots(payload->envp, ENVP_SLOTS, (const char **)ctx->args[2]);
 
 	bpf_ringbuf_submit(hdr, 0);
 	return 0;
