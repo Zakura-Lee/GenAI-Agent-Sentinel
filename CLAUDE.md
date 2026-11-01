@@ -4,14 +4,14 @@
 
 ## 项目概述
 
-ADR（GenAI Agent Detection & Response）：检测与响应 GenAI Agent 的行为。内核态用 eBPF 捕获行为事件，Go 规则引擎实时判定，大模型（Claude API）做事后审计，前端可视化，PostgreSQL（+pgvector）存储日志与知识库。
+ADR（GenAI Agent Detection & Response）：检测与响应 GenAI Agent 的行为。内核态用 eBPF 捕获行为事件，Go 规则引擎实时判定，大模型（DeepSeek 等）做事后审计，前端可视化，PostgreSQL（+pgvector）存储日志与知识库。
 
 ## 技术栈
 
 - **内核态检测**：C + eBPF，使用 `libbpf` + CO-RE（`vmlinux.h` 由 bpftool 生成）
 - **规则 agent / 审计**：Go 1.27
-- **LLM 审计**：Claude API（Anthropic Go SDK）
-- **前端**：Node 24 / Vite（框架待定）
+- **LLM 审计**：DeepSeek（OpenAI 兼容）为主，抽象 Provider 接口兼容多供应商（Claude/OpenAI 等）
+- **前端**：Node 24 / React + TypeScript + Vite
 - **数据库**：PostgreSQL 16 + pgvector 0.6；Redis 7 作事件队列
 
 ## 目录约定
