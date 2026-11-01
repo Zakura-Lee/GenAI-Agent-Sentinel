@@ -65,9 +65,9 @@ func runAgent() error {
 			fmt.Fprintln(os.Stderr, "读取事件失败:", err)
 			continue
 		}
-		fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s\n",
+		fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
 			e.Pid, e.Ppid, e.Uid, e.Gid,
-			cstr(e.Comm[:]), cstr(e.Argv[:]))
+			cstr(e.Comm[:]), cstr(e.Argv[:]), cstr(e.Envp[:]))
 	}
 }
 
