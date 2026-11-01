@@ -4,6 +4,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_endian.h>
 #include "adr_event.h"
 
 char LICENSE[] SEC("license") = "GPL";
@@ -123,4 +124,80 @@ int BPF_PROG(vfs_read_exit, struct file *file, char *buf, size_t count, loff_t *
 	if (ret <= 0)
 		return 0;
 	return handle_pipe_io(file, buf, (size_t)ret, 0);
+}
+
+// handle_dns 解析 DNS query 报文（跳过 12 字节头）提取 qname 并上报 DNS 事件。
+static __always_inline int handle_dns(const char *dns, long remain)
+{
+	__u32 size = sizeof(struct adr_event_header) + sizeof(struct adr_dns_payload);
+
+	struct adr_event_header *hdr = bpf_ringbuf_reserve(&events, size, 0);
+	if (!hdr)
+		return 0;
+
+	hdr->ts_ns = bpf_ktime_get_ns();
+	hdr->type = ADR_EVENT_DNS;
+	hdr->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	hdr->ppid = 0;
+	hdr->uid = 0;
+	hdr->gid = 0;
+	hdr->reserved = 0;
+	__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
+
+	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
+	int off = 12; // 跳过 DNS header
+	int dst = 0;
+
+	for (int i = 0; i < 64; i++) {
+		u8 lbl;
+
+		if (off >= remain || dst >= ADR_NAME_LEN - 1)
+			break;
+		if (bpf_probe_read_user(&lbl, 1, dns + off) < 0)
+			break;
+		if (lbl == 0)
+			break;
+		off++;
+		if (dst > 0)
+			p->qname[dst++] = '.';
+		if (dst + lbl >= ADR_NAME_LEN - 1)
+			break;
+		if (bpf_probe_read_user(p->qname + dst, lbl, dns + off) < 0)
+			break;
+		dst += lbl;
+		off += lbl;
+	}
+	p->qname[dst] = '\0';
+
+	bpf_ringbuf_submit(hdr, 0);
+	return 0;
+}
+
+SEC("fentry/udp_sendmsg")
+int BPF_PROG(udp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t len)
+{
+	__be16 dport = 0;
+	if (bpf_core_read(&dport, sizeof(dport), &sk->__sk_common.skc_dport) < 0)
+		return 0;
+	if (dport != bpf_htons(53))
+		return 0;
+
+	const struct iovec *iov = NULL;
+	size_t iov_off = 0;
+	if (bpf_core_read(&iov, sizeof(iov), &msg->msg_iter.__iov) < 0)
+		return 0;
+	if (bpf_core_read(&iov_off, sizeof(iov_off), &msg->msg_iter.iov_offset) < 0)
+		return 0;
+
+	const char *base = NULL;
+	size_t iov_len = 0;
+	if (bpf_probe_read_user(&base, sizeof(base), &iov[0].iov_base) < 0)
+		return 0;
+	if (bpf_probe_read_user(&iov_len, sizeof(iov_len), &iov[0].iov_len) < 0)
+		return 0;
+
+	if (!base || iov_off >= iov_len || iov_len - iov_off < 13)
+		return 0;
+
+	return handle_dns(base + iov_off, (long)(iov_len - iov_off));
 }

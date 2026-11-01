@@ -59,4 +59,14 @@ struct adr_pipe_payload {
 	char data[ADR_PIPE_DATA_LEN];
 };
 
+// adr_dns_payload DNS 事件 payload
+struct adr_dns_payload {
+	char qname[ADR_NAME_LEN];
+};
+
+// adr_sni_payload SNI 事件 payload
+struct adr_sni_payload {
+	char server_name[ADR_NAME_LEN];
+};
+
 #endif // __ADR_EVENT_H

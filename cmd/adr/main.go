@@ -70,6 +70,10 @@ func runAgent() error {
 			printExec(e)
 		case egress.EventTypePipe:
 			printPipe(e)
+		case egress.EventTypeDNS:
+			printDNS(e)
+		case egress.EventTypeSNI:
+			printSNI(e)
 		default:
 			fmt.Printf("event type=%d pid=%d\n", e.Header.Type, e.Header.Pid)
 		}
@@ -93,6 +97,16 @@ func printPipe(e *egress.Event) {
 	}
 	fmt.Printf("pipe ino=%d pid=%d dir=%s len=%d data=%q\n",
 		p.Ino, e.Header.Pid, dir, p.Len, p.Data[:p.Len])
+}
+
+// printDNS 打印 DNS 事件。
+func printDNS(e *egress.Event) {
+	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, cstr(e.Dns.Qname[:]))
+}
+
+// printSNI 打印 SNI 事件。
+func printSNI(e *egress.Event) {
+	fmt.Printf("sni pid=%d server_name=%s\n", e.Header.Pid, cstr(e.Sni.ServerName[:]))
 }
 
 // cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。

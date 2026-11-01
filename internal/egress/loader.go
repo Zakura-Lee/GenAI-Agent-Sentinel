@@ -15,6 +15,8 @@ import (
 const (
 	execPayloadSize = 16 + 256 + 512
 	pipePayloadSize = 8 + 4 + 4 + 128
+	dnsPayloadSize  = 256
+	sniPayloadSize  = 256
 )
 
 // Loader 负责加载 eBPF 程序集、挂载各类 hook 并读取事件。
@@ -144,6 +146,24 @@ func parseEvent(raw []byte) (*Event, error) {
 			return nil, fmt.Errorf("解析 PIPE payload: %w", err)
 		}
 		e.Pipe = p
+	case EventTypeDNS:
+		if len(payload) < dnsPayloadSize {
+			return nil, fmt.Errorf("DNS payload 过短: %d 字节", len(payload))
+		}
+		p := new(DnsPayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 DNS payload: %w", err)
+		}
+		e.Dns = p
+	case EventTypeSNI:
+		if len(payload) < sniPayloadSize {
+			return nil, fmt.Errorf("SNI payload 过短: %d 字节", len(payload))
+		}
+		p := new(SniPayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 SNI payload: %w", err)
+		}
+		e.Sni = p
 	default:
 		// 未知事件类型，忽略 payload
 	}

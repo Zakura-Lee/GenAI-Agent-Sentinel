@@ -1,6 +1,6 @@
 # eBPF 层设计
 
-- **版本**：v0.2.2
+- **版本**：v0.2.3
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：设计草案（v2，已吸收评审意见）
@@ -196,6 +196,7 @@ comm, argv, env, cwd, policy_id, decision, rule_version, detail(jsonb)
 - 阶段 1 已实现 `sys_enter_execve` 观测（EXEC 事件 + ring buffer），对应本矩阵 4.1 第一行。
 - 已补 `envp` 捕获：事件结构含 argv+envp（Go 侧 `Envp[512]`），agent 打印 `pid/ppid/uid/gid/comm/argv/envp`。
 - 已实现 PIPE 关联：`vfs_write` fentry + `vfs_read` fexit，按 pipe inode 号配对读写端；事件统一为「公共头 + payload」结构（`ebpf/adr_event.h`，对应 `docs/ebpf-protocol.md`）。
+- 已实现 DNS 识别：`udp_sendmsg` fentry，判定 dport 53 并解析 qname；SNI 解析待补（DoH/ECH 为已知盲区）。
 - 后续按 11 节优先级增量扩展；下一步 `task_alloc` 污点继承，判定走**用户态显式注入**（agent 端上报进程标记，Linux 注入方式待适配）。
 
 ## 11. 分阶段实施（四件最优先）
