@@ -1,6 +1,6 @@
 # eBPF 层设计
 
-- **版本**：v0.2.0
+- **版本**：v0.2.1
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：设计草案（v2，已吸收评审意见）
@@ -193,8 +193,9 @@ comm, argv, env, cwd, policy_id, decision, rule_version, detail(jsonb)
 
 ## 10. 与现有实现的衔接
 
-- 阶段 1 已实现 `sys_enter_execve` 观测（EXEC 事件 + ring buffer），对应本矩阵 4.1 第一行，但**需补 envp 捕获**。
-- 后续按 11 节优先级增量扩展。
+- 阶段 1 已实现 `sys_enter_execve` 观测（EXEC 事件 + ring buffer），对应本矩阵 4.1 第一行。
+- 已补 `envp` 捕获：事件结构含 argv+envp（Go 侧 `Envp[512]`），agent 打印 `pid/ppid/uid/gid/comm/argv/envp`。
+- 后续按 11 节优先级增量扩展；下一步 `task_alloc` 污点继承，判定走**用户态显式注入**（agent 端上报进程标记，Linux 注入方式待适配）。
 
 ## 11. 分阶段实施（四件最优先）
 
