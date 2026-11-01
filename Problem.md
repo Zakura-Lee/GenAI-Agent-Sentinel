@@ -65,6 +65,15 @@
 - **解决**：去掉 `set_attach_target`，用纯 `attach_lsm`（内部解析）
 
 ### 12. verifier 拒绝 read_strvec 越界访问
-- **现象**：加载报 `invalid access to memory, mem_size=848 off=847 size=511`
-- **原因**：循环变量 `off` + `break`，verifier 无法关联 `dst + off` 与 `size - off` 里的同一个 `off`，各取最坏值判定越界（编译通过、加载期才暴露）
-- **解决**：`#pragma unroll` 强制展开 + 嵌套 `if` 替代 `break`，让 verifier 逐迭代精确追踪 `off` 边界
+- **现象**：加载报 `invalid access to memory, mem_size=848 off=847 size=511/510`
+- **原因**：`dst + off` 与 `size - off` 是两个独立寄存器，verifier 只做值域推理、不做关系推理，各取最坏值判定越界；`off += n-1`（n 是 helper 返回值）让 off 恒为运行期变量，循环带回边未展开（`llvm-objdump -d | grep 'goto -'` 可查回边）
+- **解决**：改用「固定槽位 + 常量偏移」（argv[6][64]/envp[6][64]），每次偏移是编译期常量，结构上不可能溢出
+
+### 13. ringbuf 内存未初始化导致信息泄露
+- **现象**：reserve 后未清零的槽位残留上一个进程的参数
+- **原因**：`bpf_ringbuf_reserve` 返回的内存不保证清零，ringbuf 复用旧事件内存
+- **解决**：reserve 后立即 `__builtin_memset` payload 再填字段
+
+### 14. pid 复用导致 taint 串号
+- **现象**：进程退出后 pid 被回收，新进程继承旧进程的 taint
+- **解决**：taint 表键由 pid 改为 `(tgid, start_boottime tick)`；内核读 `task->start_boottime / NSEC_PER_TICK`，用户态读 `/proc/<pid>/stat` 的 starttime（第 22 字段），两边对齐

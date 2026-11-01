@@ -108,21 +108,21 @@ func (l *Loader) Read() (*Event, error) {
 	return parseEvent(record.RawSample)
 }
 
-// MarkTaint 写入 pid 的污点标记（agent 端显式注入根进程标记）。
-func (l *Loader) MarkTaint(pid uint32, taint AdrTaint) error {
+// MarkTaint 写入进程的污点标记（agent 端显式注入根进程标记）。
+func (l *Loader) MarkTaint(key TaintKey, taint AdrTaint) error {
 	if l.taints == nil {
 		return errors.New("taints map 未加载")
 	}
-	return l.taints.Update(pid, taint, ebpf.UpdateAny)
+	return l.taints.Update(key, taint, ebpf.UpdateAny)
 }
 
-// GetTaint 读取 pid 的污点标记。
-func (l *Loader) GetTaint(pid uint32) (*AdrTaint, error) {
+// GetTaint 读取进程的污点标记。
+func (l *Loader) GetTaint(key TaintKey) (*AdrTaint, error) {
 	if l.taints == nil {
 		return nil, errors.New("taints map 未加载")
 	}
 	var t AdrTaint
-	if err := l.taints.Lookup(pid, &t); err != nil {
+	if err := l.taints.Lookup(key, &t); err != nil {
 		return nil, err
 	}
 	return &t, nil

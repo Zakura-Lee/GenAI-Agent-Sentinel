@@ -25,6 +25,13 @@ struct adr_taint {
 	__u32 pad;        // 对齐
 };
 
+// adr_taint_key taint 表键：tgid + 进程启动时间（boottime 时钟 tick 数，与 /proc/<pid>/stat 的 starttime 对齐），避免 pid 复用串号。
+struct adr_taint_key {
+	__u32 tgid;
+	__u32 pad;
+	__u64 start_boottime;
+};
+
 // adr_event_header 事件公共头（64 字节，8 对齐）
 struct adr_event_header {
 	__u64 ts_ns;            // 时间戳 bpf_ktime_get_ns()
@@ -45,9 +52,9 @@ struct adr_event_header {
 #define ADR_NAME_LEN 256
 
 // 参数槽位：每个 argv/envp 元素读入固定大小槽，避免动态偏移导致 verifier 无法追踪边界。
-#define ARGV_SLOTS 8
-#define ENVP_SLOTS 16
-#define SLOT_SIZE  32
+#define ARGV_SLOTS 6
+#define ENVP_SLOTS 6
+#define SLOT_SIZE  64
 
 // adr_exec_payload EXEC 事件 payload
 struct adr_exec_payload {

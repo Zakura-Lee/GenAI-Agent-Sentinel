@@ -22,6 +22,31 @@ struct adr_taint {
 	uint32_t pad;
 };
 
+// adr_taint_key 对应 eBPF 侧 struct adr_taint_key（16 字节，start_boottime 为 tick 数）
+struct adr_taint_key {
+	uint32_t tgid;
+	uint32_t pad;
+	uint64_t start_boottime;
+};
+
+// get_start_ticks 读 /proc/self/stat 的 starttime（第 22 字段，boottime tick 数）。
+static uint64_t get_start_ticks(void)
+{
+	FILE *f = fopen("/proc/self/stat", "r");
+	unsigned long long starttime = 0;
+	int r;
+
+	if (!f)
+		return 0;
+	r = fscanf(f,
+		   "%*d %*s %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %llu",
+		   &starttime);
+	fclose(f);
+	if (r != 1)
+		return 0;
+	return starttime;
+}
+
 static void try_open(const char *who)
 {
 	int fd = open("/tmp/adr-sentinel", O_RDONLY);
@@ -81,11 +106,14 @@ int main(int argc, char **argv)
 		close(fd);
 	}
 
-	// MarkTaint 注入自己
-	uint32_t pid = (uint32_t)getpid();
+	// MarkTaint 注入自己（key = tgid + start_boottime ticks）
+	struct adr_taint_key key = {0};
+	key.tgid = (uint32_t)getpid();
+	key.start_boottime = get_start_ticks();
 	struct adr_taint t = { .session_id = 0x1234, .agent_type = 1, .depth = 1 };
-	if (taints && bpf_map__update_elem(taints, &pid, sizeof(pid), &t, sizeof(t), BPF_ANY) == 0)
-		printf("MarkTaint 注入: pid=%u session_id=0x1234 depth=1\n", pid);
+	if (taints && bpf_map__update_elem(taints, &key, sizeof(key), &t, sizeof(t), BPF_ANY) == 0)
+		printf("MarkTaint 注入: tgid=%u start_ticks=%llu session_id=0x1234 depth=1\n",
+		       key.tgid, (unsigned long long)key.start_boottime);
 	else
 		printf("MarkTaint 注入失败\n");
 
@@ -105,10 +133,10 @@ int main(int argc, char **argv)
 
 	// 主进程：读 map 验证 taint 条目，然后立即退出（子成孤儿）
 	struct adr_taint got;
-	if (taints && bpf_map__lookup_elem(taints, &pid, sizeof(pid), &got, sizeof(got), 0) == 0)
-		printf("map 验证: pid=%u session_id=0x%llx depth=%u（主进程退出前）\n",
-		       pid, (unsigned long long)got.session_id, got.depth);
+	if (taints && bpf_map__lookup_elem(taints, &key, sizeof(key), &got, sizeof(got), 0) == 0)
+		printf("map 验证: tgid=%u session_id=0x%llx depth=%u（主进程退出前）\n",
+		       key.tgid, (unsigned long long)got.session_id, got.depth);
 
-	printf("主进程退出（exit tracepoint 应清理 taints[%u]）\n", pid);
+	printf("主进程退出（exit tracepoint 应清理 taints[%u]）\n", key.tgid);
 	return 0;
 }

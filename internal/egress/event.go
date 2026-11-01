@@ -23,6 +23,13 @@ type AdrTaint struct {
 	Pad       uint32
 }
 
+// TaintKey 对应 C 侧 struct adr_taint_key（16 字节，StartBoottime 为 boottime 时钟 tick 数）。
+type TaintKey struct {
+	Tgid          uint32
+	Pad           uint32
+	StartBoottime uint64
+}
+
 // AdrEventHeader 对应 C 侧 struct adr_event_header（64 字节）。
 type AdrEventHeader struct {
 	TsNs     uint64
