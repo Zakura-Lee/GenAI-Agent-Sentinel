@@ -336,18 +336,19 @@ int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size
 	return handle_tls_sni(base + iov_off, (long)(iov_len - iov_off));
 }
 
-// trace_fork 将父进程 taint 继承给子进程（depth + 1）。
-SEC("tracepoint/sched/sched_process_fork")
-int trace_fork(struct trace_event_raw_sched_process_fork *ctx)
+// task_alloc 在进程出生时将父进程（current）的 taint 继承给新进程（depth + 1）。
+SEC("lsm/task_alloc")
+int BPF_PROG(task_alloc_entry, struct task_struct *task, unsigned long clone_flags)
 {
-	__u32 parent_pid = (__u32)ctx->parent_pid;
-	__u32 child_pid = (__u32)ctx->child_pid;
+	__u32 parent_pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	__u32 child_pid;
 	struct adr_taint *t;
 
 	t = bpf_map_lookup_elem(&taints, &parent_pid);
 	if (!t)
 		return 0;
 
+	child_pid = (__u32)BPF_CORE_READ(task, tgid);
 	struct adr_taint child = *t;
 	child.depth++;
 	bpf_map_update_elem(&taints, &child_pid, &child, BPF_ANY);
