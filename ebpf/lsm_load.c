@@ -1,5 +1,6 @@
 // lsm_load.c - LSM 程序加载器（libbpf），load + attach_lsm + pin，验证 lsm=bpf 环境。
 // 显式指定 attach 目标（bpf_lsm_ 前缀 + hook 名），避免按 section 名解析到错误的 BTF id。
+// 注意：set_attach_target 必须在 bpf_object__load 之前调用（attach_btf_id 在 load 时确定）。
 // 用法: sudo ./lsm_load <obj-file> [pin-dir]
 #include <errno.h>
 #include <stdio.h>
@@ -19,6 +20,23 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	// 先设置 attach 目标，再 load
+	struct bpf_program *prog;
+	bpf_object__for_each_program(prog, obj) {
+		const char *sec = bpf_program__section_name(prog);
+		const char *hook = sec ? strchr(sec, '/') : NULL;
+		if (hook) {
+			char target[128];
+			snprintf(target, sizeof(target), "bpf_lsm_%s", hook + 1);
+			int err = bpf_program__set_attach_target(prog, 0, target);
+			if (err) {
+				fprintf(stderr, "set attach target %s failed: %s\n", target, strerror(-err));
+				bpf_object__close(obj);
+				return 1;
+			}
+		}
+	}
+
 	int err = bpf_object__load(obj);
 	if (err) {
 		fprintf(stderr, "load failed: %s\n", strerror(-err));
@@ -26,25 +44,8 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	struct bpf_program *prog;
 	bpf_object__for_each_program(prog, obj) {
 		const char *name = bpf_program__name(prog);
-		const char *sec = bpf_program__section_name(prog);
-		const char *hook = sec ? strchr(sec, '/') : NULL;
-
-		// LSM hook 在内核 BTF 里的函数名带 bpf_lsm_ 前缀（如 bpf_lsm_file_open）。
-		// 显式指定 attach 目标，避免按 section 名解析到错误的 BTF id。
-		if (hook) {
-			char target[128];
-			snprintf(target, sizeof(target), "bpf_lsm_%s", hook + 1);
-			err = bpf_program__set_attach_target(prog, 0, target);
-			if (err) {
-				fprintf(stderr, "set attach target %s failed: %s\n", target, strerror(-err));
-				bpf_object__close(obj);
-				return 1;
-			}
-		}
-
 		struct bpf_link *link = bpf_program__attach_lsm(prog);
 		if (!link) {
 			fprintf(stderr, "attach %s failed: %s\n", name, strerror(errno));
