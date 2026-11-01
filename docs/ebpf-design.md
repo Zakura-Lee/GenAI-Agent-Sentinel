@@ -1,6 +1,6 @@
 # eBPF 层设计
 
-- **版本**：v0.2.3
+- **版本**：v0.2.4
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：设计草案（v2，已吸收评审意见）
@@ -29,7 +29,7 @@ ADR 平台的 eBPF 层承担三类能力：
 1. **三类能力分离**：观测用 `tracepoint`/`kprobe`/`uprobe`（只读）；拦截用 **LSM BPF**；网络重定向用 **cgroup BPF**。
 2. **Agent 语义优先**：`task_alloc` 污点继承是产品核心，事件必须携带 `session_id`/`taint` 而非裸 syscall 元组。
 3. **CO-RE 必须**：全部经 `vmlinux.h` + BTF 编译；BTF-less 内核提供仅观测降级路径。
-4. **拦截以 inode+devid 为主键**：路径在 LSM 里拿不到完整值，且 fd 可继承/可经 `SCM_RIGHTS` 传递，路径白名单必然有漏。
+4. **拦截主键**：路径在非 sleepable LSM 里拿不到完整值；本机内核 7.0（≥ 5.15）支持 **sleepable LSM**，可用 `BPF_F_SLEEPABLE` + `bpf_d_path` 拿完整路径，路径级强制在本机可行。仍建议以 inode+devid 为兜底（fd 可继承/可经 `SCM_RIGHTS` 传递）。
 5. **对 LLM Agent 静默降级，不硬拒绝**：直接 `EPERM` 等于告诉模型「换个法子」，默认重定向 sinkhole + 累计触发冻结。
 6. **观测与强制是两套 attach**：`security_file_open` 的 fexit 观测程序 ≠ LSM 强制程序，架构上不要画成一条线。
 
@@ -105,7 +105,7 @@ ADR 平台的 eBPF 层承担三类能力：
 
 ## 5. API 拦截（LSM BPF）hook 矩阵
 
-> 拦截统一走 LSM BPF（返回非零值即拒绝）。路径类拦截一律以 **inode+devid 为第二主键**，不把路径当唯一依据。
+> 拦截统一走 LSM BPF（返回非零值即拒绝）。路径类拦截在本机可用 **sleepable LSM + `bpf_d_path`** 拿完整路径（内核 7.0 ≥ 5.15），但仍以 inode+devid 为兜底，不把路径当唯一依据。
 
 ### 5.1 P0 — Agent 语义与绕过面核心
 
