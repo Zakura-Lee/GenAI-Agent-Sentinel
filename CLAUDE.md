@@ -38,6 +38,20 @@ make test           # 运行 Go 测试
 - `vmlinux.h`、`ebpf/build/` 由构建生成，已加入 `.gitignore`，勿提交。
 - 密钥（`ANTHROPIC_API_KEY` 等）只放 `.env`，严禁提交到仓库。
 
+## 文档与版本规范
+
+- 每次功能更新完成后，必须同步更新对应的设计/说明 markdown 文档（`docs/*.md` 及各模块 `README.md`）。
+- 每个 markdown 文档头部必须包含元信息块：
+
+  ```markdown
+  - **版本**：v<major>.<minor>.<patch>（语义化版本，每次更新递增）
+  - **日期**：YYYY-MM-DD
+  - **角色**：Zakura-Lee
+  ```
+
+- 版本号采用语义化版本：不兼容改动升 major，新增能力升 minor，修复/微调升 patch。
+- 角色固定为 Zakura-Lee，记录该次更新的负责人。
+
 ## 编码风格
 
 ### 通用
