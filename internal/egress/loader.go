@@ -54,6 +54,8 @@ func Load(obj []byte) (*Loader, error) {
 		{coll.Programs["trace_execve"], true, "syscalls", "sys_enter_execve"},
 		{coll.Programs["vfs_write_entry"], false, "", ""},
 		{coll.Programs["vfs_read_exit"], false, "", ""},
+		{coll.Programs["udp_sendmsg_entry"], false, "", ""},
+		{coll.Programs["tcp_sendmsg_entry"], false, "", ""},
 	}
 	for _, a := range attaches {
 		if a.prog == nil {
