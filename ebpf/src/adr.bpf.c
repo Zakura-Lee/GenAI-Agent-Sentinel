@@ -48,24 +48,26 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 }
 
 // read_strvec 读取用户态 char** 字符串数组并拼接进 dst，返回写入字节数（不含结尾 '\0'）。
+// 用 #pragma unroll 强制展开 + 嵌套 if 替代 break，让 verifier 能精确追踪 off 边界。
 static __always_inline long read_strvec(char *dst, long size, const char **vec)
 {
 	long off = 0;
 
+#pragma unroll
 	for (int i = 0; i < MAX_VEC; i++) {
 		const char *p = NULL;
 
-		if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) < 0 || !p)
-			break;
-		if (off >= size - 1)
-			break;
-		if (i > 0)
-			dst[off++] = ' ';
-
-		long n = bpf_probe_read_user_str(dst + off, size - off, p);
-		if (n <= 0)
-			break;
-		off += n - 1; // 返回值含结尾 '\0'
+		if (off < size - 1) {
+			if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) == 0 && p) {
+				if (i > 0) {
+					dst[off] = ' ';
+					off++;
+				}
+				long n = bpf_probe_read_user_str(dst + off, size - off, p);
+				if (n > 0)
+					off += n - 1; // 返回值含结尾 '\0'
+			}
+		}
 	}
 
 	if (off >= size)

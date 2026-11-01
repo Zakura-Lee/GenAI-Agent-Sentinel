@@ -63,3 +63,8 @@
 - **现象**：`set attach target ... failed: No such process`（-ESRCH）
 - **原因**：LSM hook 是 static linkage，`set_attach_target` 的通用查找路径不认 static 函数
 - **解决**：去掉 `set_attach_target`，用纯 `attach_lsm`（内部解析）
+
+### 12. verifier 拒绝 read_strvec 越界访问
+- **现象**：加载报 `invalid access to memory, mem_size=848 off=847 size=511`
+- **原因**：循环变量 `off` + `break`，verifier 无法关联 `dst + off` 与 `size - off` 里的同一个 `off`，各取最坏值判定越界（编译通过、加载期才暴露）
+- **解决**：`#pragma unroll` 强制展开 + 嵌套 `if` 替代 `break`，让 verifier 逐迭代精确追踪 `off` 边界
