@@ -12,6 +12,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define MAX_VEC 32
 #define S_IFMT  0xF000
 #define S_IFIFO 0x1000
+#define EPERM   1
 
 // events 为共享的 BPF ring buffer，所有事件经此上报用户态。
 struct {
@@ -361,5 +362,39 @@ int trace_exit(struct trace_event_raw_sched_process_exit *ctx)
 {
 	__u32 pid = (__u32)ctx->pid;
 	bpf_map_delete_elem(&taints, &pid);
+	return 0;
+}
+
+// is_sentinel_name 判断文件名是否为哨兵文件（用于 taint 拦截验证）。
+static __always_inline int is_sentinel_name(const char *name)
+{
+	const char magic[] = "adr-sentinel";
+#pragma unroll
+	for (int i = 0; i < (int)sizeof(magic) - 1; i++) {
+		if (name[i] != magic[i])
+			return 0;
+	}
+	return 1;
+}
+
+// taint_deny_open 检查当前进程 taint，拒绝 tainted 进程打开哨兵文件。
+SEC("lsm/file_open")
+int BPF_PROG(taint_deny_open, struct file *file)
+{
+	__u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	struct adr_taint *t;
+	char name[32] = {};
+	const unsigned char *n = NULL;
+
+	t = bpf_map_lookup_elem(&taints, &pid);
+	if (!t || t->session_id == 0)
+		return 0;
+
+	if (bpf_core_read(&n, sizeof(n), &file->f_path.dentry->d_name.name) < 0)
+		return 0;
+	bpf_probe_read_kernel_str(name, sizeof(name), n);
+
+	if (is_sentinel_name(name))
+		return -EPERM;
 	return 0;
 }

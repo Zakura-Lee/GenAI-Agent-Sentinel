@@ -58,6 +58,7 @@ func Load(obj []byte) (*Loader, error) {
 		{coll.Programs["udp_sendmsg_entry"], false, "", ""},
 		{coll.Programs["tcp_sendmsg_entry"], false, "", ""},
 		{coll.Programs["task_alloc_entry"], false, "", ""},
+		{coll.Programs["taint_deny_open"], false, "", ""},
 		{coll.Programs["trace_exit"], true, "sched", "sched_process_exit"},
 	}
 	for _, a := range attaches {
