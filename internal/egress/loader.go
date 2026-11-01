@@ -21,9 +21,10 @@ const (
 
 // Loader 负责加载 eBPF 程序集、挂载各类 hook 并读取事件。
 type Loader struct {
-	coll  *ebpf.Collection
-	links []link.Link
-	rd    *ringbuf.Reader
+	coll   *ebpf.Collection
+	links  []link.Link
+	rd     *ringbuf.Reader
+	taints *ebpf.Map
 }
 
 // Load 从 eBPF 对象字节加载程序集，挂载 execve tracepoint 与 pipe 读写 hook。
@@ -56,6 +57,8 @@ func Load(obj []byte) (*Loader, error) {
 		{coll.Programs["vfs_read_exit"], false, "", ""},
 		{coll.Programs["udp_sendmsg_entry"], false, "", ""},
 		{coll.Programs["tcp_sendmsg_entry"], false, "", ""},
+		{coll.Programs["trace_fork"], true, "sched", "sched_process_fork"},
+		{coll.Programs["trace_exit"], true, "sched", "sched_process_exit"},
 	}
 	for _, a := range attaches {
 		if a.prog == nil {
@@ -86,6 +89,12 @@ func Load(obj []byte) (*Loader, error) {
 		return nil, fmt.Errorf("创建 ring buffer 读取器: %w", err)
 	}
 
+	ldr.taints = coll.Maps["taints"]
+	if ldr.taints == nil {
+		ldr.Close()
+		return nil, errors.New("未找到 map taints")
+	}
+
 	return ldr, nil
 }
 
@@ -96,6 +105,26 @@ func (l *Loader) Read() (*Event, error) {
 		return nil, fmt.Errorf("读取 ring buffer: %w", err)
 	}
 	return parseEvent(record.RawSample)
+}
+
+// MarkTaint 写入 pid 的污点标记（agent 端显式注入根进程标记）。
+func (l *Loader) MarkTaint(pid uint32, taint AdrTaint) error {
+	if l.taints == nil {
+		return errors.New("taints map 未加载")
+	}
+	return l.taints.Update(pid, taint, ebpf.UpdateAny)
+}
+
+// GetTaint 读取 pid 的污点标记。
+func (l *Loader) GetTaint(pid uint32) (*AdrTaint, error) {
+	if l.taints == nil {
+		return nil, errors.New("taints map 未加载")
+	}
+	var t AdrTaint
+	if err := l.taints.Lookup(pid, &t); err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 // Close 释放加载器占用的全部资源。

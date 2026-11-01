@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-// ADR eBPF 程序集：execve 观测 + pipe 读写关联（MCP stdio），共享 events ring buffer。
+// ADR eBPF 程序集：execve 观测 + pipe 读写关联 + DNS/SNI 识别 + taint 继承，共享 events ring buffer。
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
@@ -18,6 +18,33 @@ struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 20); // 1 MiB
 } events SEC(".maps");
+
+// taints 记录 pid → 污点信息；用户态写 agent 根进程标记，fork 继承、exit 清理。
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 1024);
+	__type(key, __u32);      // pid (tgid)
+	__type(value, struct adr_taint);
+} taints SEC(".maps");
+
+// fill_common 填充事件公共头的通用字段（ts_ns/type/pid/reserved/taint）。
+// ppid/uid/gid 由调用方自行填充。
+static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type)
+{
+	__u32 pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	struct adr_taint *t;
+
+	hdr->ts_ns = bpf_ktime_get_ns();
+	hdr->type = type;
+	hdr->pid = pid;
+	hdr->reserved = 0;
+
+	t = bpf_map_lookup_elem(&taints, &pid);
+	if (t)
+		hdr->taint = *t;
+	else
+		__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
+}
 
 // read_strvec 读取用户态 char** 字符串数组并拼接进 dst，返回写入字节数（不含结尾 '\0'）。
 static __always_inline long read_strvec(char *dst, long size, const char **vec)
@@ -60,14 +87,10 @@ static __always_inline int handle_pipe_io(struct file *file, const char *buf, si
 	if (!hdr)
 		return 0;
 
-	hdr->ts_ns = bpf_ktime_get_ns();
-	hdr->type = ADR_EVENT_PIPE;
-	hdr->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	fill_common(hdr, ADR_EVENT_PIPE);
 	hdr->ppid = 0;
 	hdr->uid = 0;
 	hdr->gid = 0;
-	hdr->reserved = 0;
-	__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 
 	struct adr_pipe_payload *p = (struct adr_pipe_payload *)((void *)hdr + sizeof(*hdr));
 	p->ino = ino;
@@ -94,14 +117,10 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 	if (!hdr)
 		return 0;
 
-	hdr->ts_ns = bpf_ktime_get_ns();
-	hdr->type = ADR_EVENT_EXEC;
-	hdr->pid = (__u32)(pid_tgid >> 32);
+	fill_common(hdr, ADR_EVENT_EXEC);
 	hdr->ppid = (__u32)BPF_CORE_READ(task, real_parent, tgid);
 	hdr->uid = (__u32)(uid_gid & 0xffffffff);
 	hdr->gid = (__u32)(uid_gid >> 32);
-	hdr->reserved = 0;
-	__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 
 	payload = (struct adr_exec_payload *)((void *)hdr + sizeof(*hdr));
 	bpf_get_current_comm(payload->comm, sizeof(payload->comm));
@@ -135,14 +154,10 @@ static __always_inline int handle_dns(const char *dns, long remain)
 	if (!hdr)
 		return 0;
 
-	hdr->ts_ns = bpf_ktime_get_ns();
-	hdr->type = ADR_EVENT_DNS;
-	hdr->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	fill_common(hdr, ADR_EVENT_DNS);
 	hdr->ppid = 0;
 	hdr->uid = 0;
 	hdr->gid = 0;
-	hdr->reserved = 0;
-	__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 
 	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
 	int off = 12; // 跳过 DNS header
@@ -216,7 +231,6 @@ static __always_inline int handle_tls_sni(const char *data, long len)
 	int off;
 	int ext_end;
 
-	// 至少：record(5) + handshake(4) + client_version(2) + random(32) + sid_len(1)
 	if (len < 44)
 		return 0;
 
@@ -270,7 +284,6 @@ static __always_inline int handle_tls_sni(const char *data, long len)
 
 			if ((long)off + 4 + 5 > ext_end)
 				return 0;
-			// name_len 位于 server_name_list_len(2) + name_type(1) 之后
 			bpf_probe_read_user(&name_len_be, 2, data + off + 4 + 3);
 			name_len = bpf_ntohs(name_len_be);
 			if (name_len == 0 || name_len >= ADR_NAME_LEN ||
@@ -282,14 +295,10 @@ static __always_inline int handle_tls_sni(const char *data, long len)
 			if (!hdr)
 				return 0;
 
-			hdr->ts_ns = bpf_ktime_get_ns();
-			hdr->type = ADR_EVENT_SNI;
-			hdr->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+			fill_common(hdr, ADR_EVENT_SNI);
 			hdr->ppid = 0;
 			hdr->uid = 0;
 			hdr->gid = 0;
-			hdr->reserved = 0;
-			__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 
 			struct adr_sni_payload *p = (struct adr_sni_payload *)((void *)hdr + sizeof(*hdr));
 			bpf_probe_read_user(p->server_name, name_len, data + off + 4 + 5);
@@ -325,4 +334,31 @@ int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size
 		return 0;
 
 	return handle_tls_sni(base + iov_off, (long)(iov_len - iov_off));
+}
+
+// trace_fork 将父进程 taint 继承给子进程（depth + 1）。
+SEC("tracepoint/sched/sched_process_fork")
+int trace_fork(struct trace_event_raw_sched_process_fork *ctx)
+{
+	__u32 parent_pid = (__u32)ctx->parent_pid;
+	__u32 child_pid = (__u32)ctx->child_pid;
+	struct adr_taint *t;
+
+	t = bpf_map_lookup_elem(&taints, &parent_pid);
+	if (!t)
+		return 0;
+
+	struct adr_taint child = *t;
+	child.depth++;
+	bpf_map_update_elem(&taints, &child_pid, &child, BPF_ANY);
+	return 0;
+}
+
+// trace_exit 清理进程退出后的 taint，避免 pid 复用串号。
+SEC("tracepoint/sched/sched_process_exit")
+int trace_exit(struct trace_event_raw_sched_process_exit *ctx)
+{
+	__u32 pid = (__u32)ctx->pid;
+	bpf_map_delete_elem(&taints, &pid);
+	return 0;
 }
