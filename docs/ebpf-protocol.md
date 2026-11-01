@@ -1,6 +1,6 @@
 # eBPF 层协议 v0
 
-- **版本**：v0.1.0
+- **版本**：v0.1.1
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：草案（MCP pipe 与 taint 继承共同引用）
@@ -64,7 +64,7 @@ struct adr_taint {
 | `EXEC` | `comm[16]` + `argv[256]` + `envp[512]` |
 | `EXIT` | `exit_code u32` + `duration_ns u64` |
 | `FORK` | `child_pid u32` + `clone_flags u64`（头中 pid 为父进程） |
-| `PIPE` | `fd u32` + `dir u8`(0=读,1=写) + `len u16` + `data[128]`（截断载荷） |
+| `PIPE` | `ino u64` + `len u32` + `dir u32`(0=读,1=写) + `data[128]`（截断载荷；配对键用 pipe inode 号，fentry 拿不到 fd） |
 | `DNS` | `qname[256]` |
 | `SNI` | `server_name[256]` |
 

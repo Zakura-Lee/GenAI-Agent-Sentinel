@@ -5,13 +5,21 @@ import (
 	"unsafe"
 )
 
-// TestExecveEventSize 锁定 Go 侧事件结构与 eBPF 侧 struct execve_event 的字节布局一致。
-func TestExecveEventSize(t *testing.T) {
-	const want uintptr = 4*4 + 16 + 256 + 512
-	if got := unsafe.Sizeof(ExecveEvent{}); got != want {
-		t.Fatalf("ExecveEvent 大小 = %d，期望 %d（需与 eBPF 侧 struct execve_event 对齐）", got, want)
+// TestEventLayoutSize 锁定各结构与 C 侧字节布局一致。
+func TestEventLayoutSize(t *testing.T) {
+	cases := []struct {
+		name string
+		got  uintptr
+		want uintptr
+	}{
+		{"AdrEventHeader", unsafe.Sizeof(AdrEventHeader{}), 64},
+		{"AdrTaint", unsafe.Sizeof(AdrTaint{}), 32},
+		{"ExecPayload", unsafe.Sizeof(ExecPayload{}), 16 + 256 + 512},
+		{"PipePayload", unsafe.Sizeof(PipePayload{}), 8 + 4 + 4 + 128},
 	}
-	if ExecveEventSize != want {
-		t.Fatalf("ExecveEventSize = %d，期望 %d", ExecveEventSize, want)
+	for _, c := range cases {
+		if c.got != c.want {
+			t.Errorf("%s 大小 = %d，期望 %d（需与 C 侧对齐）", c.name, c.got, c.want)
+		}
 	}
 }

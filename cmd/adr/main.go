@@ -36,11 +36,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit>")
 }
 
-// runAgent 加载 eBPF 程序并循环打印捕获到的 execve 事件。
+// runAgent 加载 eBPF 程序集并循环打印捕获到的事件。
 func runAgent() error {
 	objPath := os.Getenv("ADR_BPF_OBJ")
 	if objPath == "" {
-		objPath = "ebpf/build/trace_execve.bpf.o"
+		objPath = "ebpf/build/adr.bpf.o"
 	}
 
 	obj, err := os.ReadFile(objPath)
@@ -58,17 +58,41 @@ func runAgent() error {
 		}
 	}()
 
-	fmt.Println("ADR agent 已启动，等待 execve 事件...")
+	fmt.Println("ADR agent 已启动，等待事件...")
 	for {
 		e, err := l.Read()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "读取事件失败:", err)
 			continue
 		}
-		fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
-			e.Pid, e.Ppid, e.Uid, e.Gid,
-			cstr(e.Comm[:]), cstr(e.Argv[:]), cstr(e.Envp[:]))
+		switch e.Header.Type {
+		case egress.EventTypeExec:
+			printExec(e)
+		case egress.EventTypePipe:
+			printPipe(e)
+		default:
+			fmt.Printf("event type=%d pid=%d\n", e.Header.Type, e.Header.Pid)
+		}
 	}
+}
+
+// printExec 打印 EXEC 事件。
+func printExec(e *egress.Event) {
+	p := e.Exec
+	fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
+		e.Header.Pid, e.Header.Ppid, e.Header.Uid, e.Header.Gid,
+		cstr(p.Comm[:]), cstr(p.Argv[:]), cstr(p.Envp[:]))
+}
+
+// printPipe 打印 PIPE 事件。
+func printPipe(e *egress.Event) {
+	p := e.Pipe
+	dir := "读"
+	if p.Dir == 1 {
+		dir = "写"
+	}
+	fmt.Printf("pipe ino=%d pid=%d dir=%s len=%d data=%q\n",
+		p.Ino, e.Header.Pid, dir, p.Len, p.Data[:p.Len])
 }
 
 // cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。
