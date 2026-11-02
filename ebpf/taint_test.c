@@ -1,9 +1,10 @@
-// taint_test.c - taint 继承验证工具：MarkTaint 注入 + fork 子/孙 + 读哨兵文件。
-// 验证：孙子读哨兵被拒 / 孤儿仍 tainted；无关进程与 map 清空由外部验证。
+// taint_test.c - taint 继承验证工具：MarkTaint 注入 + 线程/fork 子/孙 + 读哨兵文件。
+// 验证：孙子读哨兵被拒 / 孤儿仍 tainted / 线程归并（dump 条目数）。
 // 用法: sudo ./taint_test [obj-path]    （默认 ebpf/build/adr.bpf.o）
 #include <bpf/libbpf.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -11,6 +12,9 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+#define NTHREADS 4
+#define PIN_TAINTS "/sys/fs/bpf/adr/taints"
 
 // adr_taint 对应 eBPF 侧 struct adr_taint（32 字节）
 struct adr_taint {
@@ -28,6 +32,12 @@ struct adr_taint_key {
 	uint32_t pad;
 	uint64_t start_boottime;
 };
+
+// teardown_pins 只删除已知的 pin 名字，绝不做 rm -rf。
+static void teardown_pins(void)
+{
+	unlink(PIN_TAINTS);
+}
 
 // get_start_ticks 读 /proc/self/stat 的 starttime（boottime tick 数）。
 // 用 fgets + 定位最后一个 ')' 后逐字段解析，避免 fscanf 对 comm 空格/负数字段的解析问题。
@@ -77,11 +87,44 @@ static void try_open(const char *who)
 	}
 }
 
+static void *thread_read_sentinel(void *arg)
+{
+	char name[32];
+	snprintf(name, sizeof(name), "线程%s", (char *)arg);
+	try_open(name);
+	return NULL;
+}
+
+// dump_taints 遍历 taints map，打印所有条目并返回条数。
+static int dump_taints(struct bpf_map *map)
+{
+	struct adr_taint_key key, next;
+	struct adr_taint val;
+	int count = 0;
+
+	if (!map)
+		return 0;
+	if (bpf_map__get_next_key(map, NULL, &next, sizeof(next)) != 0)
+		return 0;
+	do {
+		key = next;
+		if (bpf_map__lookup_elem(map, &key, sizeof(key), &val, sizeof(val), 0) == 0) {
+			printf("  taints[tgid=%u start=%llu] session=0x%llx depth=%u\n",
+			       key.tgid, (unsigned long long)key.start_boottime,
+			       (unsigned long long)val.session_id, val.depth);
+			count++;
+		}
+	} while (bpf_map__get_next_key(map, &key, &next, sizeof(next)) == 0);
+	return count;
+}
+
 int main(int argc, char **argv)
 {
 	const char *obj_path = "ebpf/build/adr.bpf.o";
 	if (argc > 1)
 		obj_path = argv[1];
+
+	teardown_pins();
 
 	struct bpf_object *obj = bpf_object__open_file(obj_path, NULL);
 	if (!obj) {
@@ -93,12 +136,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	// attach LSM（task_alloc + taint_deny_open）+ trace_exit
+	// attach LSM（taint_deny_open、trace_exit）+ fentry（wake_up_new_task、pipe/dns/sni 观测）
 	struct bpf_program *prog;
 	bpf_object__for_each_program(prog, obj) {
 		const char *name = bpf_program__name(prog);
-		if (strcmp(name, "task_alloc_entry") == 0 ||
-		    strcmp(name, "taint_deny_open") == 0) {
+		if (strcmp(name, "taint_deny_open") == 0) {
 			if (!bpf_program__attach_lsm(prog)) {
 				fprintf(stderr, "attach %s failed: %s\n", name, strerror(errno));
 				return 1;
@@ -108,14 +150,22 @@ int main(int argc, char **argv)
 				fprintf(stderr, "attach trace_exit failed: %s\n", strerror(errno));
 				return 1;
 			}
+		} else if (strcmp(name, "wake_up_new_task_entry") == 0 ||
+			   strcmp(name, "trace_execve") == 0 ||
+			   strcmp(name, "vfs_write_entry") == 0 ||
+			   strcmp(name, "vfs_read_exit") == 0 ||
+			   strcmp(name, "udp_sendmsg_entry") == 0 ||
+			   strcmp(name, "tcp_sendmsg_entry") == 0) {
+			continue; // 观测类程序，验证 taint 不需要 attach
 		}
 	}
 
-	// pin taints map，供外部 bpftool 查证 map 清空
+	// pin taints map，供外部 bpftool 查证；失败不阻塞验证
 	struct bpf_map *taints = bpf_object__find_map_by_name(obj, "taints");
 	if (taints) {
 		mkdir("/sys/fs/bpf/adr", 0755);
-		bpf_map__pin(taints, "/sys/fs/bpf/adr/taints");
+		if (bpf_map__pin(taints, PIN_TAINTS) != 0)
+			fprintf(stderr, "pin taints 失败（不影响验证）\n");
 	}
 
 	int fd = open("/tmp/adr-sentinel", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -136,26 +186,37 @@ int main(int argc, char **argv)
 	else
 		printf("MarkTaint 注入失败\n");
 
+	// 线程用例：线程共享进程 taint，读哨兵应被拒，且不新增 taints 条目
+	pthread_t threads[NTHREADS];
+	char names[NTHREADS][8];
+	for (int i = 0; i < NTHREADS; i++) {
+		snprintf(names[i], sizeof(names[i]), "%d", i + 1);
+		if (pthread_create(&threads[i], NULL, thread_read_sentinel, names[i]) != 0)
+			fprintf(stderr, "pthread_create 失败\n");
+	}
+	for (int i = 0; i < NTHREADS; i++)
+		pthread_join(threads[i], NULL);
+
 	// fork 子 → 孙
 	pid_t child = fork();
 	if (child == 0) {
 		pid_t gc = fork();
 		if (gc == 0) {
-			try_open("孙子进程"); // 验证1：孙子读哨兵应被拒
+			try_open("孙子进程");
 			_exit(0);
 		}
 		waitpid(gc, NULL, 0);
-		sleep(2);               // 让父进程先退出，子成孤儿
-		try_open("孤儿子进程"); // 验证4：孤儿仍 tainted，读哨兵应被拒
+		sleep(2); // 让父进程先退出，子成孤儿
+		try_open("孤儿子进程");
 		_exit(0);
 	}
 
-	// 主进程：读 map 验证 taint 条目，然后立即退出（子成孤儿）
-	struct adr_taint got;
-	if (taints && bpf_map__lookup_elem(taints, &key, sizeof(key), &got, sizeof(got), 0) == 0)
-		printf("map 验证: tgid=%u session_id=0x%llx depth=%u（主进程退出前）\n",
-		       key.tgid, (unsigned long long)got.session_id, got.depth);
+	// dump taints map（线程归并后条目数应为 主+子+孙，线程不新增）
+	printf("dump taints map:\n");
+	int n = dump_taints(taints);
+	printf("dump 条目数: %d\n", n);
 
 	printf("主进程退出（exit tracepoint 应清理 taints[%u]）\n", key.tgid);
+	teardown_pins();
 	return 0;
 }

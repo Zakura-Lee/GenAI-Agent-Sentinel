@@ -57,7 +57,7 @@ func Load(obj []byte) (*Loader, error) {
 		{coll.Programs["vfs_read_exit"], false, "", ""},
 		{coll.Programs["udp_sendmsg_entry"], false, "", ""},
 		{coll.Programs["tcp_sendmsg_entry"], false, "", ""},
-		{coll.Programs["task_alloc_entry"], false, "", ""},
+		{coll.Programs["wake_up_new_task_entry"], false, "", ""},
 		{coll.Programs["taint_deny_open"], false, "", ""},
 		{coll.Programs["trace_exit"], true, "sched", "sched_process_exit"},
 	}

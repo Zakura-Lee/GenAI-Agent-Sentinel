@@ -15,10 +15,12 @@ char LICENSE[] SEC("license") = "GPL";
 #define EPERM   1
 #define NSEC_PER_TICK 10000000ULL // USER_HZ=100 时每 tick 的纳秒数
 
-// get_start_ticks 返回 task 的启动时间（boottime 时钟 tick 数），与 /proc/<pid>/stat 的 starttime 对齐。
+// get_start_ticks 返回 task 所在线程组的启动时间（group_leader 的 boottime tick 数），
+// 与 /proc/<pid>/stat 的 starttime 对齐，并让同进程的所有线程归并到同一 key。
 static __always_inline __u64 get_start_ticks(struct task_struct *task)
 {
-	return BPF_CORE_READ(task, start_boottime) / NSEC_PER_TICK;
+	struct task_struct *leader = BPF_CORE_READ(task, group_leader);
+	return BPF_CORE_READ(leader, start_boottime) / NSEC_PER_TICK;
 }
 
 // events 为共享的 BPF ring buffer，所有事件经此上报用户态。
@@ -318,14 +320,20 @@ int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size
 	return 0;
 }
 
-// task_alloc 在进程出生时将父进程（current）的 taint 继承给新进程（depth + 1）。
-SEC("lsm/task_alloc")
-int BPF_PROG(task_alloc_entry, struct task_struct *task, unsigned long clone_flags)
+// wake_up_new_task 在进程就绪后继承父进程 taint（此时 tgid/start_boottime 已设置）。
+// 线程（tgid != pid）共享进程 tgid 与 group_leader key，无需重复继承。
+SEC("fentry/wake_up_new_task")
+int BPF_PROG(wake_up_new_task_entry, struct task_struct *task)
 {
 	struct task_struct *parent = (struct task_struct *)bpf_get_current_task();
 	struct adr_taint_key pkey;
 	struct adr_taint_key ckey;
 	struct adr_taint *t;
+	__u32 tgid = (__u32)BPF_CORE_READ(task, tgid);
+	__u32 pid = (__u32)BPF_CORE_READ(task, pid);
+
+	if (tgid != pid)
+		return 0;
 
 	pkey.tgid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 	pkey.pad = 0;
@@ -335,7 +343,7 @@ int BPF_PROG(task_alloc_entry, struct task_struct *task, unsigned long clone_fla
 	if (!t)
 		return 0;
 
-	ckey.tgid = (__u32)BPF_CORE_READ(task, tgid);
+	ckey.tgid = tgid;
 	ckey.pad = 0;
 	ckey.start_boottime = get_start_ticks(task);
 

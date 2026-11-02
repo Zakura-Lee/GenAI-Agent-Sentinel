@@ -87,3 +87,8 @@
 - **现象**：`tcp_sendmsg_entry` 加载报 `R0 has smin=1 smax=1 should have been in [0, 0]`
 - **原因**：`return handle_tls_sni(...)` 让 fentry 程序返回了 1，fentry 不允许修改被 hook 函数的返回值
 - **解决**：忽略子函数返回值，fentry 程序统一 `return 0`
+
+### 17. task_alloc 时机导致 taint 写错 key
+- **现象**：MarkTaint 注入 depth=1，map 读到 depth=2；子进程/孙子未被 tainted
+- **原因**：`security_task_alloc` 在 `copy_process` 的 `alloc_pid` 之前，`task->tgid`/`start_boottime` 仍是父进程值，子 key = 父 key，`depth++` 写回父进程
+- **解决**：改用 `fentry/wake_up_new_task`（tgid 已设置），key 用 `group_leader->start_boottime` 归并线程组；线程（`tgid != pid`）不重复继承
