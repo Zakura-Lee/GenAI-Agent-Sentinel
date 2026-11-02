@@ -1,7 +1,7 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.0
-- **日期**：2026-11-01
+- **版本**：v0.1.1
+- **日期**：2026-11-02
 - **角色**：Zakura-Lee
 
 > 记录 ADR 开发期间遇到的问题与解决方法，供后续开发避坑。
@@ -92,3 +92,8 @@
 - **现象**：MarkTaint 注入 depth=1，map 读到 depth=2；子进程/孙子未被 tainted
 - **原因**：`security_task_alloc` 在 `copy_process` 的 `alloc_pid` 之前，`task->tgid`/`start_boottime` 仍是父进程值，子 key = 父 key，`depth++` 写回父进程
 - **解决**：改用 `fentry/wake_up_new_task`（tgid 已设置），key 用 `group_leader->start_boottime` 归并线程组；线程（`tgid != pid`）不重复继承
+
+### 18. taint_test 误将继承程序放进「跳过 attach」分支
+- **现象**：线程归并被拒正常（4 线程全拒、dump 仅 1 条），但进程 fork 后孙子未被 tainted（dump 无子/孙条目）
+- **原因**：`taint_test.c` 的 attach 循环把 `wake_up_new_task_entry` 与其他观测程序一起 `continue` 跳过，继承程序从未挂载
+- **解决**：`wake_up_new_task_entry` 单独 `bpf_program__attach`；仅观测类程序跳过
