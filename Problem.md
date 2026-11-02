@@ -77,3 +77,13 @@
 ### 14. pid 复用导致 taint 串号
 - **现象**：进程退出后 pid 被回收，新进程继承旧进程的 taint
 - **解决**：taint 表键由 pid 改为 `(tgid, start_boottime tick)`；内核读 `task->start_boottime / NSEC_PER_TICK`，用户态读 `/proc/<pid>/stat` 的 starttime（第 22 字段），两边对齐
+
+### 15. DNS qname 动态拼接同样触发 verifier 越界
+- **现象**：`udp_sendmsg_entry` 加载报 `invalid access to memory, off=320 size=255`
+- **原因**：qname 逐 label 拼接时 `p->qname + dst` 与 `lbl` 动态关联，同问题 12
+- **解决**：eBPF 侧固定大小读原始 qname（label 格式），变长解析移到 Go 的 `parseDNSQname`
+
+### 16. fentry 程序返回值必须为 0
+- **现象**：`tcp_sendmsg_entry` 加载报 `R0 has smin=1 smax=1 should have been in [0, 0]`
+- **原因**：`return handle_tls_sni(...)` 让 fentry 程序返回了 1，fentry 不允许修改被 hook 函数的返回值
+- **解决**：忽略子函数返回值，fentry 程序统一 `return 0`

@@ -313,7 +313,9 @@ int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size
 	if (!base || iov_off >= iov_len)
 		return 0;
 
-	return handle_tls_sni(base + iov_off, (long)(iov_len - iov_off));
+	// 忽略 handle_tls_sni 的返回值（fentry 程序必须返回 0）
+	handle_tls_sni(base + iov_off, (long)(iov_len - iov_off));
+	return 0;
 }
 
 // task_alloc 在进程出生时将父进程（current）的 taint 继承给新进程（depth + 1）。
