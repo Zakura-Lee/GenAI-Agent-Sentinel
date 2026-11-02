@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
 )
@@ -36,11 +37,11 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit>")
 }
 
-// runAgent 加载 eBPF 程序并循环打印捕获到的 execve 事件。
+// runAgent 加载 eBPF 程序集并循环打印捕获到的事件。
 func runAgent() error {
 	objPath := os.Getenv("ADR_BPF_OBJ")
 	if objPath == "" {
-		objPath = "ebpf/build/trace_execve.bpf.o"
+		objPath = "ebpf/build/adr.bpf.o"
 	}
 
 	obj, err := os.ReadFile(objPath)
@@ -58,17 +59,72 @@ func runAgent() error {
 		}
 	}()
 
-	fmt.Println("ADR agent 已启动，等待 execve 事件...")
+	fmt.Println("ADR agent 已启动，等待事件...")
 	for {
 		e, err := l.Read()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "读取事件失败:", err)
 			continue
 		}
-		fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
-			e.Pid, e.Ppid, e.Uid, e.Gid,
-			cstr(e.Comm[:]), cstr(e.Argv[:]), cstr(e.Envp[:]))
+		switch e.Header.Type {
+		case egress.EventTypeExec:
+			printExec(e)
+		case egress.EventTypePipe:
+			printPipe(e)
+		case egress.EventTypeDNS:
+			printDNS(e)
+		case egress.EventTypeSNI:
+			printSNI(e)
+		default:
+			fmt.Printf("event type=%d pid=%d\n", e.Header.Type, e.Header.Pid)
+		}
 	}
+}
+
+// printExec 打印 EXEC 事件。
+func printExec(e *egress.Event) {
+	p := e.Exec
+	fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
+		e.Header.Pid, e.Header.Ppid, e.Header.Uid, e.Header.Gid,
+		cstr(p.Comm[:]), joinSlots(p.Argv[:]), joinSlots(p.Envp[:]))
+}
+
+// printPipe 打印 PIPE 事件。
+func printPipe(e *egress.Event) {
+	p := e.Pipe
+	dir := "读"
+	if p.Dir == 1 {
+		dir = "写"
+	}
+	fmt.Printf("pipe ino=%d pid=%d dir=%s len=%d data=%q\n",
+		p.Ino, e.Header.Pid, dir, p.Len, p.Data[:p.Len])
+}
+
+// printDNS 打印 DNS 事件。
+func printDNS(e *egress.Event) {
+	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, parseDNSQname(e.Dns.Qname[:]))
+}
+
+// parseDNSQname 将 DNS label 格式（[len][bytes]...）解析为点分隔域名。
+func parseDNSQname(raw []byte) string {
+	var b strings.Builder
+	for i := 0; i < len(raw); {
+		l := int(raw[i])
+		if l == 0 || i+1+l > len(raw) {
+			break
+		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.Write(raw[i+1 : i+1+l])
+		i += 1 + l
+	}
+	return b.String()
+}
+
+// printSNI 打印 SNI 事件。
+func printSNI(e *egress.Event) {
+	fmt.Printf("sni pid=%d server_name=%s\n", e.Header.Pid, cstr(e.Sni.ServerName[:]))
 }
 
 // cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。
@@ -77,4 +133,15 @@ func cstr(b []byte) string {
 		return string(b[:i])
 	}
 	return string(b)
+}
+
+// joinSlots 将固定槽位数组拼接为空格分隔的字符串。
+func joinSlots(slots [][32]byte) string {
+	parts := make([]string, 0, len(slots))
+	for _, s := range slots {
+		if str := cstr(s[:]); str != "" {
+			parts = append(parts, str)
+		}
+	}
+	return strings.Join(parts, " ")
 }
