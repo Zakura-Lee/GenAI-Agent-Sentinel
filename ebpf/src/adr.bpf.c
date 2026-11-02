@@ -143,7 +143,7 @@ int BPF_PROG(vfs_read_exit, struct file *file, char *buf, size_t count, loff_t *
 	return handle_pipe_io(file, buf, (size_t)ret, 0);
 }
 
-// handle_dns 解析 DNS query 报文（跳过 12 字节头）提取 qname 并上报 DNS 事件。
+// handle_dns 读取 DNS query 的原始 qname（label 格式），固定大小读，变长解析留给用户态。
 static __always_inline int handle_dns(const char *dns, long remain)
 {
 	__u32 size = sizeof(struct adr_event_header) + sizeof(struct adr_dns_payload);
@@ -158,29 +158,11 @@ static __always_inline int handle_dns(const char *dns, long remain)
 	hdr->gid = 0;
 
 	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
-	int off = 12; // 跳过 DNS header
-	int dst = 0;
+	__builtin_memset(p, 0, sizeof(*p));
 
-	for (int i = 0; i < 64; i++) {
-		u8 lbl;
-
-		if (off >= remain || dst >= ADR_NAME_LEN - 1)
-			break;
-		if (bpf_probe_read_user(&lbl, 1, dns + off) < 0)
-			break;
-		if (lbl == 0)
-			break;
-		off++;
-		if (dst > 0)
-			p->qname[dst++] = '.';
-		if (dst + lbl >= ADR_NAME_LEN - 1)
-			break;
-		if (bpf_probe_read_user(p->qname + dst, lbl, dns + off) < 0)
-			break;
-		dst += lbl;
-		off += lbl;
-	}
-	p->qname[dst] = '\0';
+	// 读原始 qname（跳过 12 字节 DNS header），固定大小；label 解析交给用户态
+	if (remain > 12)
+		bpf_probe_read_user(p->qname, ADR_NAME_LEN, dns + 12);
 
 	bpf_ringbuf_submit(hdr, 0);
 	return 0;

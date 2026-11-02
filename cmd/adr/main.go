@@ -102,7 +102,24 @@ func printPipe(e *egress.Event) {
 
 // printDNS 打印 DNS 事件。
 func printDNS(e *egress.Event) {
-	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, cstr(e.Dns.Qname[:]))
+	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, parseDNSQname(e.Dns.Qname[:]))
+}
+
+// parseDNSQname 将 DNS label 格式（[len][bytes]...）解析为点分隔域名。
+func parseDNSQname(raw []byte) string {
+	var b strings.Builder
+	for i := 0; i < len(raw); {
+		l := int(raw[i])
+		if l == 0 || i+1+l > len(raw) {
+			break
+		}
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.Write(raw[i+1 : i+1+l])
+		i += 1 + l
+	}
+	return b.String()
 }
 
 // printSNI 打印 SNI 事件。
