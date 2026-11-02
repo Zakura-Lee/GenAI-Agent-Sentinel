@@ -136,7 +136,7 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	// attach LSM（taint_deny_open、trace_exit）+ fentry（wake_up_new_task、pipe/dns/sni 观测）
+	// attach LSM（taint_deny_open）+ fentry（wake_up_new_task 继承）+ tracepoint（trace_exit 清理）
 	struct bpf_program *prog;
 	bpf_object__for_each_program(prog, obj) {
 		const char *name = bpf_program__name(prog);
@@ -145,13 +145,17 @@ int main(int argc, char **argv)
 				fprintf(stderr, "attach %s failed: %s\n", name, strerror(errno));
 				return 1;
 			}
+		} else if (strcmp(name, "wake_up_new_task_entry") == 0) {
+			if (!bpf_program__attach(prog)) {
+				fprintf(stderr, "attach %s failed: %s\n", name, strerror(errno));
+				return 1;
+			}
 		} else if (strcmp(name, "trace_exit") == 0) {
 			if (!bpf_program__attach_tracepoint(prog, "sched", "sched_process_exit")) {
 				fprintf(stderr, "attach trace_exit failed: %s\n", strerror(errno));
 				return 1;
 			}
-		} else if (strcmp(name, "wake_up_new_task_entry") == 0 ||
-			   strcmp(name, "trace_execve") == 0 ||
+		} else if (strcmp(name, "trace_execve") == 0 ||
 			   strcmp(name, "vfs_write_entry") == 0 ||
 			   strcmp(name, "vfs_read_exit") == 0 ||
 			   strcmp(name, "udp_sendmsg_entry") == 0 ||
