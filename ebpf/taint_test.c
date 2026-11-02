@@ -29,21 +29,40 @@ struct adr_taint_key {
 	uint64_t start_boottime;
 };
 
-// get_start_ticks 读 /proc/self/stat 的 starttime（第 22 字段，boottime tick 数）。
+// get_start_ticks 读 /proc/self/stat 的 starttime（boottime tick 数）。
+// 用 fgets + 定位最后一个 ')' 后逐字段解析，避免 fscanf 对 comm 空格/负数字段的解析问题。
 static uint64_t get_start_ticks(void)
 {
 	FILE *f = fopen("/proc/self/stat", "r");
+	char buf[1024];
+	char *p;
 	unsigned long long starttime = 0;
-	int r;
+	int field;
 
 	if (!f)
 		return 0;
-	r = fscanf(f,
-		   "%*d %*s %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %*u %llu",
-		   &starttime);
-	fclose(f);
-	if (r != 1)
+	if (!fgets(buf, sizeof(buf), f)) {
+		fclose(f);
 		return 0;
+	}
+	fclose(f);
+
+	p = strrchr(buf, ')');
+	if (!p)
+		return 0;
+	p++;
+
+	// ')' 后第 20 个字段是 starttime
+	for (field = 1; field <= 20; field++) {
+		while (*p == ' ' || *p == '\t')
+			p++;
+		if (field == 20) {
+			starttime = strtoull(p, NULL, 10);
+			break;
+		}
+		while (*p && *p != ' ' && *p != '\t')
+			p++;
+	}
 	return starttime;
 }
 
