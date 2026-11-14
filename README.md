@@ -47,6 +47,9 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 ## 快速开始
 
 ```bash
+# 0) 检查依赖（完整清单见 docs/DEPENDENCIES.md）
+go version && clang --version && bpftool version && ls /sys/kernel/btf/vmlinux
+
 # 1) 初始化开发环境（已装过可跳过）
 sudo ./setup.sh
 
@@ -80,6 +83,7 @@ sudo go run ./cmd/adr agent
 | 文档 | 内容 |
 |---|---|
 | [`docs/PLAN.md`](docs/PLAN.md) | 分阶段实现计划与验收标准 |
+| [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |
 | [`Problem.md`](Problem.md) | 开发期间问题与解决方法记录 |
