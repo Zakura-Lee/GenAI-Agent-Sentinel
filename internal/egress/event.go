@@ -45,8 +45,8 @@ type AdrEventHeader struct {
 // ExecPayload 对应 C 侧 struct adr_exec_payload。
 type ExecPayload struct {
 	Comm [16]byte
-	Argv [8][32]byte
-	Envp [16][32]byte
+	Argv [6][64]byte
+	Envp [6][64]byte
 }
 
 // PipePayload 对应 C 侧 struct adr_pipe_payload。

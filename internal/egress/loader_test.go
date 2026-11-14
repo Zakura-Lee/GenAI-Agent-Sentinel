@@ -17,9 +17,9 @@ func TestParseExecEvent(t *testing.T) {
 	binary.LittleEndian.PutUint32(raw[24:28], 1000)
 	// payload 起始于 64
 	copy(raw[64:80], "bash")            // comm
-	copy(raw[80:112], "ls")             // argv[0]
-	copy(raw[112:144], "-la")           // argv[1]
-	copy(raw[336:368], "PATH=/usr/bin") // envp[0]
+	copy(raw[80:144], "ls")             // argv[0]（64 字节槽）
+	copy(raw[144:208], "-la")           // argv[1]
+	copy(raw[464:528], "PATH=/usr/bin") // envp[0]（argv 6×64 之后）
 
 	e, err := parseEvent(raw)
 	if err != nil {

@@ -14,6 +14,7 @@ char LICENSE[] SEC("license") = "GPL";
 #define S_IFIFO 0x1000
 #define EPERM   1
 #define NSEC_PER_TICK 10000000ULL // USER_HZ=100 时每 tick 的纳秒数
+#define PIPE_MIN_LEN 4            // 过滤过短的 pipe 数据（终端控制字符等无观测价值）
 
 // get_start_ticks 返回 task 所在线程组的启动时间（group_leader 的 boottime tick 数），
 // 与 /proc/<pid>/stat 的 starttime 对齐，并让同进程的所有线程归并到同一 key。
@@ -62,13 +63,20 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 }
 
 // read_slots 将用户态 char** 数组逐个读入固定大小槽位（verifier 友好的固定偏移）。
+// 遇到 NULL（数组结束）即停止，避免越界读到相邻数组（如 argv 之后紧邻的 envp）。
 static __always_inline void read_slots(char (*dst)[SLOT_SIZE], int max_slots, const char **vec)
 {
+	int stop = 0;
+
 #pragma unroll
 	for (int i = 0; i < max_slots; i++) {
 		const char *p = NULL;
-		if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) == 0 && p)
-			bpf_probe_read_user_str(dst[i], SLOT_SIZE, p);
+		if (!stop) {
+			if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) != 0 || !p)
+				stop = 1;
+			else
+				bpf_probe_read_user_str(dst[i], SLOT_SIZE, p);
+		}
 	}
 }
 
@@ -77,6 +85,10 @@ static __always_inline int handle_pipe_io(struct file *file, const char *buf, si
 {
 	umode_t mode = BPF_CORE_READ(file, f_inode, i_mode);
 	if ((mode & S_IFMT) != S_IFIFO)
+		return 0;
+
+	// 过滤过短的 pipe 数据（终端控制字符等无观测价值）
+	if (len < PIPE_MIN_LEN)
 		return 0;
 
 	__u64 ino = BPF_CORE_READ(file, f_inode, i_ino);

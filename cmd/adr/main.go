@@ -10,6 +10,11 @@ import (
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
 )
 
+// envSecretKeywords 环境变量名包含这些子串时视为敏感，值会被脱敏。
+var envSecretKeywords = []string{
+	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTHORIZATION",
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -81,12 +86,12 @@ func runAgent() error {
 	}
 }
 
-// printExec 打印 EXEC 事件。
+// printExec 打印 EXEC 事件（envp 中敏感变量值脱敏）。
 func printExec(e *egress.Event) {
 	p := e.Exec
 	fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
 		e.Header.Pid, e.Header.Ppid, e.Header.Uid, e.Header.Gid,
-		cstr(p.Comm[:]), joinSlots(p.Argv[:]), joinSlots(p.Envp[:]))
+		cstr(p.Comm[:]), joinSlots(p.Argv[:]), redactEnv(p.Envp[:]))
 }
 
 // printPipe 打印 PIPE 事件。
@@ -136,7 +141,7 @@ func cstr(b []byte) string {
 }
 
 // joinSlots 将固定槽位数组拼接为空格分隔的字符串。
-func joinSlots(slots [][32]byte) string {
+func joinSlots(slots [][64]byte) string {
 	parts := make([]string, 0, len(slots))
 	for _, s := range slots {
 		if str := cstr(s[:]); str != "" {
@@ -144,4 +149,33 @@ func joinSlots(slots [][32]byte) string {
 		}
 	}
 	return strings.Join(parts, " ")
+}
+
+// redactEnv 拼接环境变量槽位，并对敏感变量值脱敏。
+func redactEnv(slots [][64]byte) string {
+	parts := make([]string, 0, len(slots))
+	for _, s := range slots {
+		str := cstr(s[:])
+		if str == "" {
+			continue
+		}
+		parts = append(parts, redactEnvVar(str))
+	}
+	return strings.Join(parts, " ")
+}
+
+// redactEnvVar 将形如 KEY=VALUE 的敏感环境变量值替换为 ***。
+func redactEnvVar(s string) string {
+	i := strings.IndexByte(s, '=')
+	if i <= 0 {
+		return s
+	}
+	key := s[:i]
+	upper := strings.ToUpper(key)
+	for _, kw := range envSecretKeywords {
+		if strings.Contains(upper, kw) {
+			return key + "=***"
+		}
+	}
+	return s
 }

@@ -1,6 +1,6 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.2
+- **版本**：v0.1.4
 - **日期**：2026-11-14
 - **角色**：Zakura-Lee
 
@@ -102,3 +102,13 @@
 - **现象**：朋友拉取仓库后 `sudo adr agent` 报 `挂载程序: invalid program type LSM, expected Tracing`
 - **原因**：`taint_deny_open` 是 LSM 程序（`SEC("lsm/file_open")`），`loader.go` 里用 `link.AttachTracing` 挂载；该 API 只接受 Tracing 类型（fentry/fexit）
 - **解决**：按程序类型分三种 attach——tracepoint / `AttachTracing`（fentry/fexit）/ `AttachLSM`（LSM）
+
+### 20. argv 槽位越界读到 envp
+- **现象**：execve 事件的 argv 里混入环境变量，如 `argv=which ps VSCODE_CWD=/home/fff`
+- **原因**：`read_slots` 遇到 NULL（argv 数组结束）后继续读 `vec[i+1..]`，越界读到紧邻的 `envp` 数组
+- **解决**：`read_slots` 遇 NULL 置 `stop`，后续槽位不再读取
+
+### 21. C/Go 事件结构布局不一致
+- **现象**：argv/envp 解析错位
+- **原因**：C 侧槽位从 `[8][32]/[16][32]` 改为 `[6][64]/[6][64]` 时，Go 侧 `ExecPayload` 未同步；总大小都是 784 但内部布局不同（argv 384/256、envp 384/512）
+- **解决**：Go 侧 `ExecPayload` 同步为 `Argv [6][64]byte` / `Envp [6][64]byte`，`execPayloadSize` 改为 `16 + 6*64 + 6*64`
