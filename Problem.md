@@ -1,6 +1,6 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.3
+- **版本**：v0.1.4
 - **日期**：2026-11-14
 - **角色**：Zakura-Lee
 
@@ -107,3 +107,8 @@
 - **现象**：execve 事件的 argv 里混入环境变量，如 `argv=which ps VSCODE_CWD=/home/fff`
 - **原因**：`read_slots` 遇到 NULL（argv 数组结束）后继续读 `vec[i+1..]`，越界读到紧邻的 `envp` 数组
 - **解决**：`read_slots` 遇 NULL 置 `stop`，后续槽位不再读取
+
+### 21. C/Go 事件结构布局不一致
+- **现象**：argv/envp 解析错位
+- **原因**：C 侧槽位从 `[8][32]/[16][32]` 改为 `[6][64]/[6][64]` 时，Go 侧 `ExecPayload` 未同步；总大小都是 784 但内部布局不同（argv 384/256、envp 384/512）
+- **解决**：Go 侧 `ExecPayload` 同步为 `Argv [6][64]byte` / `Envp [6][64]byte`，`execPayloadSize` 改为 `16 + 6*64 + 6*64`

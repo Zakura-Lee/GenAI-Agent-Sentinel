@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	execPayloadSize = 16 + 256 + 512
+	execPayloadSize = 16 + 6*64 + 6*64 // comm + argv[6][64] + envp[6][64]
 	pipePayloadSize = 8 + 4 + 4 + 128
 	dnsPayloadSize  = 256
 	sniPayloadSize  = 256
