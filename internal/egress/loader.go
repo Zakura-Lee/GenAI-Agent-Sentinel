@@ -45,36 +45,25 @@ func Load(obj []byte) (*Loader, error) {
 
 	ldr := &Loader{coll: coll}
 
-	type attachSpec struct {
-		prog         *ebpf.Program
-		isTracepoint bool
-		group        string
-		name         string
-	}
 	attaches := []attachSpec{
-		{coll.Programs["trace_execve"], true, "syscalls", "sys_enter_execve"},
-		{coll.Programs["vfs_write_entry"], false, "", ""},
-		{coll.Programs["vfs_read_exit"], false, "", ""},
-		{coll.Programs["udp_sendmsg_entry"], false, "", ""},
-		{coll.Programs["tcp_sendmsg_entry"], false, "", ""},
-		{coll.Programs["wake_up_new_task_entry"], false, "", ""},
-		{coll.Programs["taint_deny_open"], false, "", ""},
-		{coll.Programs["trace_exit"], true, "sched", "sched_process_exit"},
+		{name: "trace_execve", prog: coll.Programs["trace_execve"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_execve"},
+		{name: "vfs_write_entry", prog: coll.Programs["vfs_write_entry"], kind: attachTracing},
+		{name: "vfs_read_exit", prog: coll.Programs["vfs_read_exit"], kind: attachTracing},
+		{name: "udp_sendmsg_entry", prog: coll.Programs["udp_sendmsg_entry"], kind: attachTracing},
+		{name: "tcp_sendmsg_entry", prog: coll.Programs["tcp_sendmsg_entry"], kind: attachTracing},
+		{name: "wake_up_new_task_entry", prog: coll.Programs["wake_up_new_task_entry"], kind: attachTracing},
+		{name: "taint_deny_open", prog: coll.Programs["taint_deny_open"], kind: attachLSM},
+		{name: "trace_exit", prog: coll.Programs["trace_exit"], kind: attachTracepoint, group: "sched", tp: "sched_process_exit"},
 	}
 	for _, a := range attaches {
 		if a.prog == nil {
 			ldr.Close()
-			return nil, fmt.Errorf("未找到程序 %s", progName(a))
+			return nil, fmt.Errorf("未找到程序 %s", a.name)
 		}
-		var l link.Link
-		if a.isTracepoint {
-			l, err = link.Tracepoint(a.group, a.name, a.prog, nil)
-		} else {
-			l, err = link.AttachTracing(link.TracingOptions{Program: a.prog})
-		}
+		l, err := attach(a)
 		if err != nil {
 			ldr.Close()
-			return nil, fmt.Errorf("挂载程序: %w", err)
+			return nil, fmt.Errorf("挂载程序 %s: %w", a.name, err)
 		}
 		ldr.links = append(ldr.links, l)
 	}
@@ -202,18 +191,34 @@ func parseEvent(raw []byte) (*Event, error) {
 	return &e, nil
 }
 
-// progName 返回 attach 目标的程序名（供错误信息使用）。
-func progName(a struct {
-	prog         *ebpf.Program
-	isTracepoint bool
-	group        string
-	name         string
-}) string {
-	if a.name != "" {
-		return a.name
+// attachKind 标识程序挂载方式。
+type attachKind int
+
+const (
+	attachTracepoint attachKind = iota
+	attachTracing
+	attachLSM
+)
+
+// attachSpec 描述一个待挂载的程序。
+type attachSpec struct {
+	name  string
+	prog  *ebpf.Program
+	kind  attachKind
+	group string
+	tp    string
+}
+
+// attach 按程序类型选择挂载方式。
+func attach(a attachSpec) (link.Link, error) {
+	switch a.kind {
+	case attachTracepoint:
+		return link.Tracepoint(a.group, a.tp, a.prog, nil)
+	case attachTracing:
+		return link.AttachTracing(link.TracingOptions{Program: a.prog})
+	case attachLSM:
+		return link.AttachLSM(link.LSMOptions{Program: a.prog})
+	default:
+		return nil, fmt.Errorf("未知挂载类型: %d", a.kind)
 	}
-	if a.prog != nil {
-		return a.prog.String()
-	}
-	return ""
 }
