@@ -62,13 +62,20 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 }
 
 // read_slots 将用户态 char** 数组逐个读入固定大小槽位（verifier 友好的固定偏移）。
+// 遇到 NULL（数组结束）即停止，避免越界读到相邻数组（如 argv 之后紧邻的 envp）。
 static __always_inline void read_slots(char (*dst)[SLOT_SIZE], int max_slots, const char **vec)
 {
+	int stop = 0;
+
 #pragma unroll
 	for (int i = 0; i < max_slots; i++) {
 		const char *p = NULL;
-		if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) == 0 && p)
-			bpf_probe_read_user_str(dst[i], SLOT_SIZE, p);
+		if (!stop) {
+			if (bpf_probe_read_user(&p, sizeof(p), &vec[i]) != 0 || !p)
+				stop = 1;
+			else
+				bpf_probe_read_user_str(dst[i], SLOT_SIZE, p);
+		}
 	}
 }
 

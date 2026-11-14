@@ -1,6 +1,6 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.2
+- **版本**：v0.1.3
 - **日期**：2026-11-14
 - **角色**：Zakura-Lee
 
@@ -102,3 +102,8 @@
 - **现象**：朋友拉取仓库后 `sudo adr agent` 报 `挂载程序: invalid program type LSM, expected Tracing`
 - **原因**：`taint_deny_open` 是 LSM 程序（`SEC("lsm/file_open")`），`loader.go` 里用 `link.AttachTracing` 挂载；该 API 只接受 Tracing 类型（fentry/fexit）
 - **解决**：按程序类型分三种 attach——tracepoint / `AttachTracing`（fentry/fexit）/ `AttachLSM`（LSM）
+
+### 20. argv 槽位越界读到 envp
+- **现象**：execve 事件的 argv 里混入环境变量，如 `argv=which ps VSCODE_CWD=/home/fff`
+- **原因**：`read_slots` 遇到 NULL（argv 数组结束）后继续读 `vec[i+1..]`，越界读到紧邻的 `envp` 数组
+- **解决**：`read_slots` 遇 NULL 置 `stop`，后续槽位不再读取
