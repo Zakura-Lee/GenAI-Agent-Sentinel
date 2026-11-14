@@ -1,7 +1,7 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.1
-- **日期**：2026-11-02
+- **版本**：v0.1.2
+- **日期**：2026-11-14
 - **角色**：Zakura-Lee
 
 > 记录 ADR 开发期间遇到的问题与解决方法，供后续开发避坑。
@@ -97,3 +97,8 @@
 - **现象**：线程归并被拒正常（4 线程全拒、dump 仅 1 条），但进程 fork 后孙子未被 tainted（dump 无子/孙条目）
 - **原因**：`taint_test.c` 的 attach 循环把 `wake_up_new_task_entry` 与其他观测程序一起 `continue` 跳过，继承程序从未挂载
 - **解决**：`wake_up_new_task_entry` 单独 `bpf_program__attach`；仅观测类程序跳过
+
+### 19. LSM 程序用 AttachTracing 挂载报错
+- **现象**：朋友拉取仓库后 `sudo adr agent` 报 `挂载程序: invalid program type LSM, expected Tracing`
+- **原因**：`taint_deny_open` 是 LSM 程序（`SEC("lsm/file_open")`），`loader.go` 里用 `link.AttachTracing` 挂载；该 API 只接受 Tracing 类型（fentry/fexit）
+- **解决**：按程序类型分三种 attach——tracepoint / `AttachTracing`（fentry/fexit）/ `AttachLSM`（LSM）
