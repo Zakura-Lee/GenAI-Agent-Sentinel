@@ -6,56 +6,87 @@ import (
 	"testing"
 )
 
-// TestIsAIProcess 验证推理进程识别（comm / cmdline 特征）。
-func TestIsAIProcess(t *testing.T) {
+// TestIdentifyAgent 验证 Agent 识别（comm / cmdline 特征）。
+func TestIdentifyAgent(t *testing.T) {
 	cases := []struct {
 		name string
 		info *ProcInfo
-		want bool
+		want string
 	}{
-		{"ollama-comm", &ProcInfo{Comm: "ollama"}, true},
-		{"llama-server-comm", &ProcInfo{Comm: "llama-server"}, true},
-		{"vllm-cmdline", &ProcInfo{Comm: "python3", Cmdline: []string{"python3", "-m", "vllm.entrypoints.openai.api_server"}}, true},
-		{"bash", &ProcInfo{Comm: "bash", Cmdline: []string{"bash", "-c", "ls"}}, false},
-		{"nginx", &ProcInfo{Comm: "nginx", Cmdline: []string{"nginx", "-g", "daemon off;"}}, false},
+		{"claude-comm", &ProcInfo{Comm: "claude"}, "claude-code"},
+		{"cursor-comm", &ProcInfo{Comm: "cursor"}, "cursor"},
+		{"codex-comm", &ProcInfo{Comm: "codex"}, "codex"},
+		{"aider-cmdline", &ProcInfo{Comm: "python3", Cmdline: []string{"python3", "-m", "aider"}}, "aider"},
+		{"bash", &ProcInfo{Comm: "bash", Cmdline: []string{"bash", "-c", "ls"}}, ""},
 	}
 	for _, c := range cases {
-		if got := isAIProcess(c.info); got != c.want {
-			t.Errorf("%s: isAIProcess = %v，期望 %v", c.name, got, c.want)
+		if got, _, _ := IdentifyAgent(c.info); got != c.want {
+			t.Errorf("%s: IdentifyAgent = %q，期望 %q", c.name, got, c.want)
 		}
 	}
 }
 
-// TestFilterAIDSOS 验证只保留 AI 相关共享库。
-func TestFilterAIDSOS(t *testing.T) {
-	dsos := []string{
-		"/usr/lib/x86_64-linux-gnu/libc.so.6",
-		"/usr/lib/x86_64-linux-gnu/libcuda.so.1",
-		"/usr/lib/x86_64-linux-gnu/libtorch_cpu.so",
-		"/usr/lib/x86_64-linux-gnu/libz.so.1",
+// TestInferProvider 验证厂商推断优先级。
+func TestInferProvider(t *testing.T) {
+	cases := []struct {
+		name           string
+		harness        string
+		configProvider string
+		model          string
+		envKeys        []string
+		apiHosts       []string
+		want           string
+	}{
+		{"config-provider", "claude-code", "deepseek", "", nil, nil, "deepseek"},
+		{"model-prefix", "claude-code", "", "gpt-4o", nil, nil, "openai"},
+		{"env-key", "aider", "", "", []string{"ANTHROPIC_API_KEY"}, nil, "anthropic"},
+		{"api-host", "cursor", "", "", nil, []string{"api.deepseek.com"}, "deepseek"},
+		{"harness-fallback", "claude-code", "", "", nil, nil, "anthropic"},
 	}
-	got := filterAIDSOS(dsos)
-	if len(got) != 2 {
-		t.Fatalf("AI DSO 数 = %d，期望 2: %v", len(got), got)
+	for _, c := range cases {
+		got := InferProvider(c.harness, c.configProvider, c.model, c.envKeys, c.apiHosts)
+		if got != c.want {
+			t.Errorf("%s: InferProvider = %q，期望 %q", c.name, got, c.want)
+		}
 	}
 }
 
-// TestModelFilesFromFDs 验证从 fd 中提取模型文件。
-func TestModelFilesFromFDs(t *testing.T) {
+// TestModelFromConfig 验证配置文件 model 字段解析（JSON / YAML）。
+func TestModelFromConfig(t *testing.T) {
 	dir := t.TempDir()
-	gguf := filepath.Join(dir, "m.gguf")
-	buf := make([]byte, 24)
-	copy(buf[0:4], "GGUF")
-	if err := os.WriteFile(gguf, buf, 0o600); err != nil {
+	jsonPath := filepath.Join(dir, "settings.json")
+	if err := os.WriteFile(jsonPath, []byte(`{"model":"claude-sonnet-4","provider":"anthropic"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	yamlPath := filepath.Join(dir, ".aider.conf.yml")
+	if err := os.WriteFile(yamlPath, []byte("model: deepseek-chat\nprovider: deepseek\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	fds := []string{gguf, "/dev/null", "/usr/lib/libc.so.6", gguf}
-	files := modelFilesFromFDs(fds)
-	if len(files) != 1 {
-		t.Fatalf("模型文件数 = %d，期望 1（去重后）: %v", len(files), files)
+	m, p := ModelFromConfig([]string{jsonPath})
+	if m != "claude-sonnet-4" || p != "anthropic" {
+		t.Fatalf("JSON: model=%q provider=%q", m, p)
 	}
-	if files[0].Format != "gguf" {
-		t.Fatalf("Format = %q，期望 gguf", files[0].Format)
+
+	m, p = ModelFromConfig([]string{yamlPath})
+	if m != "deepseek-chat" || p != "deepseek" {
+		t.Fatalf("YAML: model=%q provider=%q", m, p)
+	}
+}
+
+// TestModelFromCmdline 验证 --model 参数提取。
+func TestModelFromCmdline(t *testing.T) {
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"claude", "--model", "claude-opus-4"}, "claude-opus-4"},
+		{[]string{"aider", "--model=gpt-4o"}, "gpt-4o"},
+		{[]string{"ls"}, ""},
+	}
+	for _, c := range cases {
+		if got := ModelFromCmdline(c.args); got != c.want {
+			t.Errorf("ModelFromCmdline(%v) = %q，期望 %q", c.args, got, c.want)
+		}
 	}
 }

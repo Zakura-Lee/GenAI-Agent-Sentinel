@@ -1,9 +1,9 @@
 package fingerprint
 
-// Asset 为一条 AI 资产记录（对齐 CycloneDX ML-BOM 字段）。
-type Asset struct {
+// AgentSession 为一条 AI Agent/Harness 会话：谁在跑、用哪个厂商的哪个模型。
+type AgentSession struct {
 	// 进程维度
-	Pid        uint32            `json:"pid,omitempty"`
+	Pid        uint32            `json:"pid"`
 	Ppid       uint32            `json:"ppid,omitempty"`
 	Comm       string            `json:"comm,omitempty"`
 	Exe        string            `json:"exe,omitempty"`
@@ -15,44 +15,16 @@ type Asset struct {
 	Cgroup     string            `json:"cgroup,omitempty"`
 	NsInodes   map[string]string `json:"ns_inodes,omitempty"`
 
-	// 文件维度
-	ModelFiles []ModelFile `json:"model_files,omitempty"`
+	// Agent 维度
+	Harness     string   `json:"harness"`                // claude-code / cursor / codex / cline / aider / continue / windsurf / zed
+	ConfigFiles []string `json:"config_files,omitempty"` // 命中的 Agent 配置文件路径
+	EnvKeys     []string `json:"env_keys,omitempty"`     // 命中的 API key 环境变量名（只名字，不取值）
 
-	// 网络维度
-	ListenPorts []PortInfo `json:"listen_ports,omitempty"`
+	// 厂商 / 模型维度
+	Provider string   `json:"provider,omitempty"`  // anthropic / openai / deepseek / google / ...
+	Model    string   `json:"model,omitempty"`     // claude-sonnet-4 / gpt-4o / deepseek-chat
+	APIHosts []string `json:"api_hosts,omitempty"` // 运行时由 eBPF SNI/DNS 观察到的 API 域名
 
-	// 运行时维度
-	DSOs []string `json:"dsos,omitempty"`
-	GPU  *GPUInfo `json:"gpu,omitempty"`
-
-	// 环境（白名单）
-	Env map[string]string `json:"env,omitempty"`
-
-	// Source 标记资产来源：proc-scan / ebpf-event
+	// Source 标记会话来源：proc-scan / config-scan
 	Source string `json:"source"`
-}
-
-// ModelFile 为模型文件指纹（对齐 CycloneDX ML-BOM 的 component 字段）。
-type ModelFile struct {
-	Path   string `json:"path"`
-	Size   int64  `json:"size"`
-	Format string `json:"format"` // gguf / safetensors / onnx / hdf5 / pytorch / pickle
-	Arch   string `json:"arch,omitempty"`
-	Quant  string `json:"quant,omitempty"`
-	Hash   string `json:"hash,omitempty"` // 采样哈希（头 1MB + 尾 1MB + size）
-}
-
-// PortInfo 为监听端口与探测结果。
-type PortInfo struct {
-	Protocol string   `json:"protocol"` // tcp / tcp6 / udp
-	Port     uint32   `json:"port"`
-	Addr     string   `json:"addr,omitempty"`
-	Service  string   `json:"service,omitempty"` // ollama / openai-compat / unknown
-	Models   []string `json:"models,omitempty"`
-}
-
-// GPUInfo 为 GPU 占用。
-type GPUInfo struct {
-	Device     string `json:"device"`
-	UsedMemory uint64 `json:"used_memory_mb"`
 }

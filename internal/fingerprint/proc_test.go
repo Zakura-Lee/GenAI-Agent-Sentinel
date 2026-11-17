@@ -45,29 +45,39 @@ func TestParseProcStat(t *testing.T) {
 	}
 }
 
-// TestReadAllowlistedEnv 验证 environ 只保留白名单变量。
-func TestReadAllowlistedEnv(t *testing.T) {
+// TestReadAgentEnv 验证 environ 区分「取值」与「只记名字」。
+func TestReadAgentEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/environ"
 	data := strings.Join([]string{
-		"HF_HOME=/home/u/.cache/huggingface",
-		"OLLAMA_MODELS=/home/u/.ollama/models",
-		"SECRET_KEY=should-not-leak",
+		"ANTHROPIC_MODEL=claude-sonnet-4",
+		"ANTHROPIC_API_KEY=sk-secret-should-not-leak",
+		"OPENAI_API_KEY=sk-other",
 		"PATH=/usr/bin",
 	}, "\x00")
 	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	env := readAllowlistedEnv(path)
-	if env["HF_HOME"] != "/home/u/.cache/huggingface" {
-		t.Fatalf("HF_HOME = %q", env["HF_HOME"])
+	values, keys := readAgentEnv(path)
+	if values["ANTHROPIC_MODEL"] != "claude-sonnet-4" {
+		t.Fatalf("ANTHROPIC_MODEL = %q", values["ANTHROPIC_MODEL"])
 	}
-	if _, ok := env["SECRET_KEY"]; ok {
-		t.Fatal("SECRET_KEY 不应被采集")
+	if _, ok := values["PATH"]; ok {
+		t.Fatal("PATH 不在白名单，不应取值")
 	}
-	if _, ok := env["PATH"]; ok {
-		t.Fatal("PATH 不在白名单，不应被采集")
+
+	keySet := map[string]bool{}
+	for _, k := range keys {
+		keySet[k] = true
+	}
+	if !keySet["ANTHROPIC_API_KEY"] || !keySet["OPENAI_API_KEY"] {
+		t.Fatalf("应命中 API key 变量名: %v", keys)
+	}
+	for _, v := range values {
+		if strings.Contains(v, "sk-") {
+			t.Fatalf("敏感值泄漏: %q", v)
+		}
 	}
 }
 

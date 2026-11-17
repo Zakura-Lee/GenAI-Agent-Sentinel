@@ -8,10 +8,19 @@ import (
 	"strings"
 )
 
-// envAllowlist 为 AI 相关环境变量白名单（只采集这些，避免泄露密钥）。
-var envAllowlist = []string{
-	"HF_HOME", "OLLAMA_MODELS", "CUDA_VISIBLE_DEVICES", "TRANSFORMERS_CACHE",
-	"HF_HUB_CACHE", "VLLM_CACHE_ROOT", "TORCH_HOME",
+// envValueAllowlist 采集值的白名单（非敏感：模型名与 API 端点）。
+var envValueAllowlist = []string{
+	"ANTHROPIC_MODEL", "OPENAI_MODEL", "DEEPSEEK_MODEL", "GOOGLE_MODEL", "GEMINI_MODEL",
+	"CLAUDE_MODEL", "CURSOR_MODEL", "CODEIUM_MODEL",
+	"ANTHROPIC_BASE_URL", "OPENAI_BASE_URL", "DEEPSEEK_BASE_URL", "OLLAMA_HOST",
+}
+
+// envKeyAllowlist 采集存在性的敏感变量（只记录名字，绝不取值）。
+var envKeyAllowlist = []string{
+	"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "DEEPSEEK_API_KEY",
+	"GOOGLE_API_KEY", "GEMINI_API_KEY", "MISTRAL_API_KEY",
+	"GROQ_API_KEY", "OPENROUTER_API_KEY", "TOGETHER_API_KEY",
+	"CODEIUM_API_KEY", "CURSOR_API_KEY",
 }
 
 // errnoStatFields 是 /proc/<pid>/stat 在 ')' 之后的最小字段数（starttime 在索引 19）。
@@ -31,6 +40,7 @@ type ProcInfo struct {
 	Cgroup     string            `json:"cgroup,omitempty"`
 	NsInodes   map[string]string `json:"ns_inodes,omitempty"`
 	Environ    map[string]string `json:"environ,omitempty"`
+	EnvKeys    []string          `json:"env_keys,omitempty"`
 	FDs        []string          `json:"fds,omitempty"`
 	DSOs       []string          `json:"dsos,omitempty"`
 }
@@ -71,7 +81,7 @@ func ReadProc(pid uint32) (*ProcInfo, error) {
 	}
 
 	info.NsInodes = readNsInodes(filepath.Join(base, "ns"))
-	info.Environ = readAllowlistedEnv(filepath.Join(base, "environ"))
+	info.Environ, info.EnvKeys = readAgentEnv(filepath.Join(base, "environ"))
 	info.FDs = readFDs(filepath.Join(base, "fd"), 64)
 	info.DSOs = readDSOs(filepath.Join(base, "maps"))
 
@@ -140,30 +150,41 @@ func readNsInodes(dir string) map[string]string {
 	return out
 }
 
-// readAllowlistedEnv 读取 environ 并只保留白名单变量。
-func readAllowlistedEnv(path string) map[string]string {
+// readAgentEnv 读取 environ：非敏感变量取值，敏感变量只记录名字。
+func readAgentEnv(path string) (map[string]string, []string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	allow := make(map[string]bool, len(envAllowlist))
-	for _, k := range envAllowlist {
-		allow[k] = true
+
+	valueAllow := make(map[string]bool, len(envValueAllowlist))
+	for _, k := range envValueAllowlist {
+		valueAllow[k] = true
 	}
-	out := map[string]string{}
+	keyAllow := make(map[string]bool, len(envKeyAllowlist))
+	for _, k := range envKeyAllowlist {
+		keyAllow[k] = true
+	}
+
+	values := map[string]string{}
+	var keys []string
 	for _, kv := range strings.Split(string(data), "\x00") {
 		i := strings.IndexByte(kv, '=')
 		if i <= 0 {
 			continue
 		}
-		if k := kv[:i]; allow[k] {
-			out[k] = kv[i+1:]
+		k := kv[:i]
+		if valueAllow[k] {
+			values[k] = kv[i+1:]
+		}
+		if keyAllow[k] {
+			keys = append(keys, k)
 		}
 	}
-	if len(out) == 0 {
-		return nil
+	if len(values) == 0 {
+		values = nil
 	}
-	return out
+	return values, keys
 }
 
 // readFDs 读取打开的 fd 目标（最多 max 个）。
