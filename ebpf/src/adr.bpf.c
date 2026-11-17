@@ -75,38 +75,35 @@ static __always_inline int is_tainted_current(void)
 	return bpf_map_lookup_elem(&taints, &key) != NULL;
 }
 
-// has_suffix 判断长度 n 的字符串是否以 suffix 结尾（slen 为常量实参，便于展开）。
-static __always_inline int has_suffix(const char *s, int n, const char *suffix, int slen)
-{
-	if (n < slen)
-		return 0;
-
-#pragma unroll
-	for (int i = 0; i < slen; i++) {
-		if (s[n - slen + i] != suffix[i])
-			return 0;
-	}
-	return 1;
-}
-
 // is_model_ext 判断路径是否以常见模型文件扩展名结尾（n 为不含 NUL 的长度）。
+// 直接比较末尾字节，避免循环展开在 verifier 侧的偏差。
 static __always_inline int is_model_ext(const char *path, int n)
 {
 	if (n <= 0)
 		return 0;
-	if (has_suffix(path, n, ".gguf", 5))
+	if (n >= 5 && path[n - 5] == '.' && path[n - 4] == 'g' &&
+	    path[n - 3] == 'g' && path[n - 2] == 'u' && path[n - 1] == 'f')
 		return 1;
-	if (has_suffix(path, n, ".safetensors", 12))
+	if (n >= 12 && path[n - 12] == '.' && path[n - 11] == 's' &&
+	    path[n - 10] == 'a' && path[n - 9] == 'f' && path[n - 8] == 'e' &&
+	    path[n - 7] == 't' && path[n - 6] == 'e' && path[n - 5] == 'n' &&
+	    path[n - 4] == 's' && path[n - 3] == 'o' && path[n - 2] == 'r' &&
+	    path[n - 1] == 's')
 		return 1;
-	if (has_suffix(path, n, ".onnx", 5))
+	if (n >= 5 && path[n - 5] == '.' && path[n - 4] == 'o' &&
+	    path[n - 3] == 'n' && path[n - 2] == 'n' && path[n - 1] == 'x')
 		return 1;
-	if (has_suffix(path, n, ".sft", 4))
+	if (n >= 4 && path[n - 4] == '.' && path[n - 3] == 's' &&
+	    path[n - 2] == 'f' && path[n - 1] == 't')
 		return 1;
-	if (has_suffix(path, n, ".pth", 4))
+	if (n >= 4 && path[n - 4] == '.' && path[n - 3] == 'p' &&
+	    path[n - 2] == 't' && path[n - 1] == 'h')
 		return 1;
-	if (has_suffix(path, n, ".pt", 3))
+	if (n >= 3 && path[n - 3] == '.' && path[n - 2] == 'p' &&
+	    path[n - 1] == 't')
 		return 1;
-	if (has_suffix(path, n, ".h5", 3))
+	if (n >= 3 && path[n - 3] == '.' && path[n - 2] == 'h' &&
+	    path[n - 1] == '5')
 		return 1;
 	return 0;
 }
