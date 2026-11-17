@@ -2,13 +2,13 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
+	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/rule"
 )
 
 // envSecretKeywords 环境变量名包含这些子串时视为敏感，值会被脱敏。
@@ -65,7 +65,23 @@ func runAgent() error {
 		}
 	}()
 
-	markAgentProcesses(l)
+	rulesPath := os.Getenv("ADR_RULES")
+	if rulesPath == "" {
+		rulesPath = "rules/default.yaml"
+	}
+	watcher, err := rule.NewWatcher(rulesPath)
+	if err != nil {
+		return fmt.Errorf("加载规则 %s: %w", rulesPath, err)
+	}
+	defer func() {
+		if err := watcher.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "关闭规则监听失败:", err)
+		}
+	}()
+	go watcher.Run()
+	engine := watcher.Engine()
+
+	markAgentByRules(l, engine)
 
 	fmt.Println("ADR agent 已启动，等待事件...")
 	for {
@@ -74,6 +90,15 @@ func runAgent() error {
 			fmt.Fprintln(os.Stderr, "读取事件失败:", err)
 			continue
 		}
+
+		for _, m := range engine.Evaluate(e) {
+			fmt.Printf("告警 rule=%s name=%s verdict=%s severity=%s pid=%d\n",
+				m.Rule.ID, m.Rule.Name, m.Verdict, m.Severity, e.Header.Pid)
+			if m.Rule.AgentType != 0 {
+				markTaintForEvent(l, e, m.Rule.AgentType)
+			}
+		}
+
 		switch e.Header.Type {
 		case egress.EventTypeExec:
 			printExec(e)
@@ -93,17 +118,8 @@ func runAgent() error {
 	}
 }
 
-// defaultAgentWhitelist 默认识别的 GenAI Agent 进程名（comm）。
-var defaultAgentWhitelist = []string{"claude", "codex", "cursor", "continue", "copilot", "aider"}
-
-// markAgentProcesses 扫描 /proc，按 comm 白名单为现有 Agent 进程写入 taint。
-// 额外白名单可通过 ADR_AGENT_WHITELIST（逗号分隔）注入。
-func markAgentProcesses(l *egress.Loader) {
-	whitelist := defaultAgentWhitelist
-	if extra := os.Getenv("ADR_AGENT_WHITELIST"); extra != "" {
-		whitelist = append(append([]string{}, whitelist...), strings.Split(extra, ",")...)
-	}
-
+// markAgentByRules 扫描 /proc，用规则引擎识别 Agent 进程并写入 taint。
+func markAgentByRules(l *egress.Loader, engine *rule.Engine) {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "扫描 /proc 失败:", err)
@@ -111,8 +127,8 @@ func markAgentProcesses(l *egress.Loader) {
 	}
 
 	marked := 0
-	for _, e := range entries {
-		pid64, err := strconv.ParseUint(e.Name(), 10, 32)
+	for _, ent := range entries {
+		pid64, err := strconv.ParseUint(ent.Name(), 10, 32)
 		if err != nil {
 			continue
 		}
@@ -122,38 +138,44 @@ func markAgentProcesses(l *egress.Loader) {
 		if err != nil {
 			continue
 		}
-		name := strings.TrimSpace(string(comm))
-		if !matchesWhitelist(name, whitelist) {
-			continue
-		}
 
-		ticks, err := egress.ReadStartTicks(pid)
-		if err != nil {
-			continue
+		// 构造虚拟 EXEC 事件供规则匹配（仅含 comm，用于 agent 识别）
+		ev := &egress.Event{
+			Header: egress.AdrEventHeader{Type: egress.EventTypeExec, Pid: pid},
+			Exec:   &egress.ExecPayload{},
 		}
+		copy(ev.Exec.Comm[:], strings.TrimSpace(string(comm)))
 
-		key := egress.TaintKey{Tgid: pid, StartBoottime: ticks}
-		taint := egress.AdrTaint{SessionID: 1, AgentType: 1, Depth: 1}
-		if err := l.MarkTaint(key, taint); err != nil {
-			fmt.Fprintf(os.Stderr, "标记 pid=%d 失败: %v\n", pid, err)
-			continue
+		for _, m := range engine.Evaluate(ev) {
+			if m.Rule.AgentType == 0 {
+				continue
+			}
+			if markTaintForEvent(l, ev, m.Rule.AgentType) {
+				fmt.Printf("已标记 agent 进程: pid=%d comm=%s rule=%s\n",
+					pid, egress.CStr(ev.Exec.Comm[:]), m.Rule.ID)
+				marked++
+			}
+			break
 		}
-		fmt.Printf("已标记 agent 进程: pid=%d comm=%s\n", pid, name)
-		marked++
 	}
 	if marked > 0 {
 		fmt.Printf("共标记 %d 个 agent 进程\n", marked)
 	}
 }
 
-// matchesWhitelist 判断 comm 是否命中白名单（精确匹配）。
-func matchesWhitelist(name string, whitelist []string) bool {
-	for _, w := range whitelist {
-		if name == strings.TrimSpace(w) {
-			return true
-		}
+// markTaintForEvent 按事件 pid 写入 taint（规则引擎接管 agent 识别）。
+func markTaintForEvent(l *egress.Loader, e *egress.Event, agentType uint32) bool {
+	ticks, err := egress.ReadStartTicks(e.Header.Pid)
+	if err != nil {
+		return false
 	}
-	return false
+	key := egress.TaintKey{Tgid: e.Header.Pid, StartBoottime: ticks}
+	taint := egress.AdrTaint{SessionID: 1, AgentType: agentType, Depth: 1}
+	if err := l.MarkTaint(key, taint); err != nil {
+		fmt.Fprintf(os.Stderr, "标记 pid=%d 失败: %v\n", e.Header.Pid, err)
+		return false
+	}
+	return true
 }
 
 // printExec 打印 EXEC 事件（envp 中敏感变量值脱敏）。
@@ -161,7 +183,7 @@ func printExec(e *egress.Event) {
 	p := e.Exec
 	fmt.Printf("execve pid=%d ppid=%d uid=%d gid=%d comm=%s argv=%s envp=%s\n",
 		e.Header.Pid, e.Header.Ppid, e.Header.Uid, e.Header.Gid,
-		cstr(p.Comm[:]), joinSlots(p.Argv[:]), redactEnv(p.Envp[:]))
+		egress.CStr(p.Comm[:]), egress.JoinSlots(p.Argv[:]), redactEnv(p.Envp[:]))
 }
 
 // printPipe 打印 PIPE 事件。
@@ -177,29 +199,12 @@ func printPipe(e *egress.Event) {
 
 // printDNS 打印 DNS 事件。
 func printDNS(e *egress.Event) {
-	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, parseDNSQname(e.Dns.Qname[:]))
-}
-
-// parseDNSQname 将 DNS label 格式（[len][bytes]...）解析为点分隔域名。
-func parseDNSQname(raw []byte) string {
-	var b strings.Builder
-	for i := 0; i < len(raw); {
-		l := int(raw[i])
-		if l == 0 || i+1+l > len(raw) {
-			break
-		}
-		if b.Len() > 0 {
-			b.WriteByte('.')
-		}
-		b.Write(raw[i+1 : i+1+l])
-		i += 1 + l
-	}
-	return b.String()
+	fmt.Printf("dns pid=%d qname=%s\n", e.Header.Pid, egress.ParseDNSQname(e.Dns.Qname[:]))
 }
 
 // printSNI 打印 SNI 事件。
 func printSNI(e *egress.Event) {
-	fmt.Printf("sni pid=%d server_name=%s\n", e.Header.Pid, cstr(e.Sni.ServerName[:]))
+	fmt.Printf("sni pid=%d server_name=%s\n", e.Header.Pid, egress.CStr(e.Sni.ServerName[:]))
 }
 
 // printExit 打印 EXIT 事件。
@@ -213,30 +218,11 @@ func printFork(e *egress.Event) {
 	fmt.Printf("fork ppid=%d child_pid=%d\n", e.Header.Pid, e.Fork.ChildPid)
 }
 
-// cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。
-func cstr(b []byte) string {
-	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return string(b[:i])
-	}
-	return string(b)
-}
-
-// joinSlots 将固定槽位数组拼接为空格分隔的字符串。
-func joinSlots(slots [][64]byte) string {
-	parts := make([]string, 0, len(slots))
-	for _, s := range slots {
-		if str := cstr(s[:]); str != "" {
-			parts = append(parts, str)
-		}
-	}
-	return strings.Join(parts, " ")
-}
-
 // redactEnv 拼接环境变量槽位，并对敏感变量值脱敏。
 func redactEnv(slots [][64]byte) string {
 	parts := make([]string, 0, len(slots))
 	for _, s := range slots {
-		str := cstr(s[:])
+		str := egress.CStr(s[:])
 		if str == "" {
 			continue
 		}
