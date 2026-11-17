@@ -29,6 +29,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
 - ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
+- ✅ **AI Agent 识别（阶段 A+B）**：eBPF 采集（openat/mmap/connect/bind/listen + SNI/DNS）+ `internal/fingerprint` 识别 Claude Code/Cursor/Codex 等 Harness 并推断厂商/模型版本，`adr fingerprint` 输出 JSON。
 - ⏳ **下一阶段**：本地规则引擎（`internal/rule`）。
 
 ## 目录结构
@@ -38,6 +39,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 | `ebpf/` | 内核态检测程序（`src/adr.bpf.c` 程序集） | C + eBPF (libbpf / CO-RE) |
 | `cmd/adr/` | 单入口（`server` / `agent` / `audit` 子命令） | Go |
 | `internal/egress/` | eBPF 加载器与事件解析（cilium/ebpf） | Go |
+| `internal/fingerprint/` | AI Agent/Harness 识别 + 厂商/版本推断 | Go |
 | `internal/rule/` | 规则引擎（下一阶段） | Go |
 | `internal/` 其余 | transport / store / soar / audit / web 骨架 | Go |
 | `frontend/` | 可视化前端 | React + TypeScript + Vite |
@@ -67,6 +69,10 @@ make build
 sudo go run ./cmd/adr agent
 #    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
 sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
+
+# 6) AI Agent 识别（输出 JSON；Ctrl+C 退出）
+go run ./cmd/adr fingerprint
+#    可通过 ADR_FP_INTERVAL 调整扫描间隔（如 10s）
 ```
 
 > 仓库：https://github.com/Zakura-Lee/GenAI-Agent-Sentinel（Go 模块路径 `github.com/Zakura-Lee/GenAI-Agent-Sentinel`）。
@@ -89,5 +95,5 @@ sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |
-| [`docs/fingerprint-design.md`](docs/fingerprint-design.md) | 指纹检测（端点 AI 资产发现）：五层模型、hook 矩阵、验证结果 |
+| [`docs/fingerprint-design.md`](docs/fingerprint-design.md) | AI Agent/Harness 识别：识别矩阵、厂商/版本推断、数据结构 |
 | [`Problem.md`](Problem.md) | 开发期间问题与解决方法记录 |

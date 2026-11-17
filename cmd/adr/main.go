@@ -3,13 +3,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
+	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/fingerprint"
 )
 
 // envSecretKeywords 环境变量名包含这些子串时视为敏感，值会被脱敏。
@@ -33,6 +38,11 @@ func main() {
 		}
 	case "audit":
 		fmt.Println("ADR audit service starting...")
+	case "fingerprint":
+		if err := runFingerprint(); err != nil {
+			fmt.Fprintln(os.Stderr, "fingerprint 错误:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -41,7 +51,25 @@ func main() {
 
 // usage 打印命令行用法并退出。
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit>")
+	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit|fingerprint>")
+}
+
+// runFingerprint 运行 AI 资产发现：定时扫描并输出 JSON，Ctrl+C 退出。
+func runFingerprint() error {
+	c := fingerprint.NewCollector()
+	if v := os.Getenv("ADR_FP_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Interval = d
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := c.Run(ctx, os.Stdout); err != nil && err != context.Canceled {
+		return err
+	}
+	return nil
 }
 
 // runAgent 加载 eBPF 程序集并循环打印捕获到的事件。
