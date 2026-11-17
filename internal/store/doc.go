@@ -1,2 +1,2 @@
-// Package store 封装 PostgreSQL 与 Redis 的访问（阶段 4/5 实现）。
+// Package store 封装 PostgreSQL 规则存储及后续数据访问。
 package store

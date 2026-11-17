@@ -1,7 +1,7 @@
 # ADR — GenAI Agent Detection & Response
 
-- **版本**：v0.1.1
-- **日期**：2026-11-02
+- **版本**：v0.4.0
+- **日期**：2026-11-16
 - **角色**：Zakura-Lee
 
 ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营平台**，融合 EDR / SIEM / SOAR 三类能力：
@@ -29,16 +29,16 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
 - ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
-- ⏳ **下一阶段**：本地规则引擎（`internal/rule`）。
+- ✅ **阶段 2 核心实现**：本地 EXEC/PIPE/DNS/SNI 规则引擎、PostgreSQL 规则 CRUD、`adr rules` 命令和 agent 告警输出（终端 + `/tmp/adr-alerts.log`）；完整运行前需按规则说明配置 PostgreSQL。
 
 ## 目录结构
 
 | 目录 | 说明 | 技术 |
 |---|---|---|
 | `ebpf/` | 内核态检测程序（`src/adr.bpf.c` 程序集） | C + eBPF (libbpf / CO-RE) |
-| `cmd/adr/` | 单入口（`server` / `agent` / `audit` 子命令） | Go |
+| `cmd/adr/` | 单入口（`server` / `agent` / `audit` / `rules` 子命令） | Go |
 | `internal/egress/` | eBPF 加载器与事件解析（cilium/ebpf） | Go |
-| `internal/rule/` | 规则引擎（下一阶段） | Go |
+| `internal/rule/` | 本地规则模型与 expr 判定引擎 | Go |
 | `internal/` 其余 | transport / store / soar / audit / web 骨架 | Go |
 | `frontend/` | 可视化前端 | React + TypeScript + Vite |
 | `db/` | 数据库 schema 与迁移 | PostgreSQL + pgvector |
@@ -54,8 +54,10 @@ go version && clang --version && bpftool version && ls /sys/kernel/btf/vmlinux
 # 1) 初始化开发环境（已装过可跳过）
 sudo ./setup.sh
 
-# 2) 配置环境变量
-cp .env.example .env      # 填入 DEEPSEEK_API_KEY / DATABASE_URL 等
+# 2) 配置 PostgreSQL 和 DATABASE_URL（规则库初始化见 docs/rules.md）
+export DATABASE_URL='postgres://adr:替换为强密码@127.0.0.1:5432/adr?sslmode=disable'
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/001_rules.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_rule_event_types.sql
 
 # 3) 构建 eBPF 程序（生成 vmlinux.h + 编译 adr.bpf.o）
 make build-ebpf
@@ -63,11 +65,14 @@ make build-ebpf
 # 4) 构建 Go
 make build
 
-# 5) 运行 agent（加载 eBPF，需 root 或 CAP_BPF；LSM 拦截另需内核 lsm=bpf）
-sudo go run ./cmd/adr agent
+# 5) 编译并运行 agent（需 root 或 CAP_BPF；当前加载器还需内核 lsm=bpf）
+go build -o /tmp/adr-agent ./cmd/adr
+sudo env "DATABASE_URL=$DATABASE_URL" /tmp/adr-agent agent
 #    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
-sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
+#    例如：sudo env "DATABASE_URL=$DATABASE_URL" ADR_AGENT_WHITELIST=my-agent /tmp/adr-agent agent
 ```
+
+告警同时追加写入 `/tmp/adr-alerts.log`；另开终端用 `sudo tail -f /tmp/adr-alerts.log` 查看。
 
 > 仓库：https://github.com/Zakura-Lee/GenAI-Agent-Sentinel（Go 模块路径 `github.com/Zakura-Lee/GenAI-Agent-Sentinel`）。
 
@@ -86,6 +91,8 @@ sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
 | 文档 | 内容 |
 |---|---|
 | [`docs/PLAN.md`](docs/PLAN.md) | 分阶段实现计划与验收标准 |
+| [`docs/rules.md`](docs/rules.md) | PostgreSQL 初始化、规则管理命令与表达式字段 |
+| [`docs/phase2-implementation-plan.md`](docs/phase2-implementation-plan.md) | 阶段 2 详细实施计划 |
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |

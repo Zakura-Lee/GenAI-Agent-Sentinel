@@ -3,18 +3,24 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
+	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/rule"
+	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/store"
 )
 
 // envSecretKeywords 环境变量名包含这些子串时视为敏感，值会被脱敏。
 var envSecretKeywords = []string{
 	"KEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTHORIZATION",
 }
+
+const defaultAlertLogPath = "/tmp/adr-alerts.log"
 
 func main() {
 	if len(os.Args) < 2 {
@@ -30,6 +36,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "agent 错误:", err)
 			os.Exit(1)
 		}
+	case "rules":
+		if err := runRules(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, "规则命令错误:", err)
+			os.Exit(1)
+		}
 	case "audit":
 		fmt.Println("ADR audit service starting...")
 	default:
@@ -40,7 +51,7 @@ func main() {
 
 // usage 打印命令行用法并退出。
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit>")
+	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit|rules>")
 }
 
 // runAgent 加载 eBPF 程序集并循环打印捕获到的事件。
@@ -55,6 +66,22 @@ func runAgent() error {
 		return fmt.Errorf("读取 eBPF 对象 %s: %w", objPath, err)
 	}
 
+	ctx := context.Background()
+	ruleStore, err := store.NewRuleStore(ctx, os.Getenv("DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("连接规则存储: %w", err)
+	}
+	defer closeRuleStore(ruleStore)
+
+	rules, err := ruleStore.ListEnabled(ctx)
+	if err != nil {
+		return err
+	}
+	engine, err := rule.NewEngine(rules)
+	if err != nil {
+		return fmt.Errorf("加载规则: %w", err)
+	}
+
 	l, err := egress.Load(obj)
 	if err != nil {
 		return fmt.Errorf("加载 eBPF: %w", err)
@@ -67,12 +94,37 @@ func runAgent() error {
 
 	markAgentProcesses(l)
 
-	fmt.Println("ADR agent 已启动，等待事件...")
+	alertLog, alertLogPath, err := openAlertLog()
+	if err != nil {
+		return fmt.Errorf("打开告警日志: %w", err)
+	}
+	defer func() {
+		if err := alertLog.Close(); err != nil {
+			fmt.Fprintln(os.Stderr, "关闭告警日志失败:", err)
+		}
+	}()
+
+	fmt.Printf("ADR agent 已启动，已加载 %d 条规则，告警日志：%s\n", len(rules), alertLogPath)
 	for {
 		e, err := l.Read()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "读取事件失败:", err)
 			continue
+		}
+		ruleEvent, err := toRuleEvent(e)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "转换规则事件失败:", err)
+			continue
+		}
+		alerts, err := engine.Evaluate(ruleEvent)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "规则判定错误:", err)
+		}
+		for _, alert := range alerts {
+			if err := writeAlert(alertLog, alert); err != nil {
+				return fmt.Errorf("写入告警日志 %s: %w", alertLogPath, err)
+			}
+			printAlert(alert)
 		}
 		switch e.Header.Type {
 		case egress.EventTypeExec:
@@ -154,6 +206,124 @@ func matchesWhitelist(name string, whitelist []string) bool {
 		}
 	}
 	return false
+}
+
+func openAlertLog() (*os.File, string, error) {
+	path := os.Getenv("ADR_ALERT_LOG")
+	if path == "" {
+		path = defaultAlertLogPath
+	}
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return nil, "", fmt.Errorf("%s: %w", path, err)
+	}
+	return file, path, nil
+}
+
+func toRuleEvent(e *egress.Event) (rule.Event, error) {
+	event := rule.Event{TimestampNS: e.Header.TsNs}
+	switch e.Header.Type {
+	case egress.EventTypeExec:
+		if e.Exec == nil {
+			return rule.Event{}, fmt.Errorf("EXEC 事件缺少 payload")
+		}
+		event.Type = rule.EventTypeExec
+		event.Exec = &rule.ExecEvent{
+			PID:  e.Header.Pid,
+			PPID: e.Header.Ppid,
+			UID:  e.Header.Uid,
+			GID:  e.Header.Gid,
+			Comm: cstr(e.Exec.Comm[:]),
+			Argv: slotStrings(e.Exec.Argv[:]),
+		}
+	case egress.EventTypePipe:
+		if e.Pipe == nil {
+			return rule.Event{}, fmt.Errorf("PIPE 事件缺少 payload")
+		}
+		if e.Pipe.Len > uint32(len(e.Pipe.Data)) {
+			return rule.Event{}, fmt.Errorf("PIPE payload 长度超出缓冲区: %d", e.Pipe.Len)
+		}
+		if e.Pipe.Dir > 1 {
+			return rule.Event{}, fmt.Errorf("PIPE payload 方向无效: %d", e.Pipe.Dir)
+		}
+		dir := "read"
+		if e.Pipe.Dir == 1 {
+			dir = "write"
+		}
+		event.Type = rule.EventTypePipe
+		event.Pipe = &rule.PipeEvent{
+			PID:  e.Header.Pid,
+			PPID: e.Header.Ppid,
+			UID:  e.Header.Uid,
+			GID:  e.Header.Gid,
+			Ino:  e.Pipe.Ino,
+			Len:  e.Pipe.Len,
+			Dir:  dir,
+			Data: string(e.Pipe.Data[:e.Pipe.Len]),
+		}
+	case egress.EventTypeDNS:
+		if e.Dns == nil {
+			return rule.Event{}, fmt.Errorf("DNS 事件缺少 payload")
+		}
+		event.Type = rule.EventTypeDNS
+		event.DNS = &rule.DNSEvent{
+			PID:   e.Header.Pid,
+			PPID:  e.Header.Ppid,
+			UID:   e.Header.Uid,
+			GID:   e.Header.Gid,
+			Qname: parseDNSQname(e.Dns.Qname[:]),
+		}
+	case egress.EventTypeSNI:
+		if e.Sni == nil {
+			return rule.Event{}, fmt.Errorf("SNI 事件缺少 payload")
+		}
+		event.Type = rule.EventTypeSNI
+		event.SNI = &rule.SNIEvent{
+			PID:        e.Header.Pid,
+			PPID:       e.Header.Ppid,
+			UID:        e.Header.Uid,
+			GID:        e.Header.Gid,
+			ServerName: cstr(e.Sni.ServerName[:]),
+		}
+	}
+	return event, nil
+}
+
+func slotStrings(slots [][64]byte) []string {
+	values := make([]string, 0, len(slots))
+	for _, slot := range slots {
+		if value := cstr(slot[:]); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func printAlert(alert rule.Alert) {
+	fmt.Println(formatAlert(alert))
+}
+
+func writeAlert(w io.Writer, alert rule.Alert) error {
+	if _, err := fmt.Fprintln(w, formatAlert(alert)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func formatAlert(alert rule.Alert) string {
+	line := fmt.Sprintf("告警 ts_ns=%d event_type=%s rule_id=%s severity=%s pid=%d ppid=%d name=%q source=%q",
+		alert.TimestampNS, alert.EventType, alert.RuleID, alert.Severity, alert.PID, alert.PPID,
+		alert.RuleName, alert.Source)
+	if alert.Comm != "" {
+		line += fmt.Sprintf(" comm=%q", alert.Comm)
+	}
+	if alert.Subject != "" {
+		line += fmt.Sprintf(" subject=%q", alert.Subject)
+	}
+	if alert.Author != "" {
+		line += fmt.Sprintf(" author=%q", alert.Author)
+	}
+	return line
 }
 
 // printExec 打印 EXEC 事件（envp 中敏感变量值脱敏）。

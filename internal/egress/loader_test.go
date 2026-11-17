@@ -65,6 +65,15 @@ func TestParsePipeEvent(t *testing.T) {
 	}
 }
 
+func TestParsePipeEventRejectsInvalidLength(t *testing.T) {
+	raw := make([]byte, AdrEventHeaderSize+pipePayloadSize)
+	binary.LittleEndian.PutUint32(raw[8:12], EventTypePipe)
+	binary.LittleEndian.PutUint32(raw[72:76], 129)
+	if _, err := parseEvent(raw); err == nil {
+		t.Fatal("期望超出缓冲区的 PIPE 长度返回错误")
+	}
+}
+
 // TestParseEventTooShort 验证过短事件返回错误。
 func TestParseEventTooShort(t *testing.T) {
 	if _, err := parseEvent(make([]byte, AdrEventHeaderSize-1)); err == nil {

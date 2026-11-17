@@ -217,8 +217,16 @@ SEC("fentry/udp_sendmsg")
 int BPF_PROG(udp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t len)
 {
 	__be16 dport = 0;
-	if (bpf_core_read(&dport, sizeof(dport), &sk->__sk_common.skc_dport) < 0)
+	void *msg_name = NULL;
+	if (bpf_core_read(&msg_name, sizeof(msg_name), &msg->msg_name) < 0)
 		return 0;
+	if (msg_name) {
+		if (bpf_core_read(&dport, sizeof(dport),
+				  (const char *)msg_name + sizeof(__u16)) < 0)
+			return 0;
+	} else if (bpf_core_read(&dport, sizeof(dport), &sk->__sk_common.skc_dport) < 0) {
+		return 0;
+	}
 	if (dport != bpf_htons(53))
 		return 0;
 

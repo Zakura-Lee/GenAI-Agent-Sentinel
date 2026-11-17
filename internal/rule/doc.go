@@ -1,2 +1,2 @@
-// Package rule 提供规则模型与本地判定引擎（阶段 2 实现）。
+// Package rule 提供本地规则模型、表达式编译与事件判定。
 package rule

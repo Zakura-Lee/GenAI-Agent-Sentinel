@@ -169,6 +169,12 @@ func parseEvent(raw []byte) (*Event, error) {
 		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
 			return nil, fmt.Errorf("解析 PIPE payload: %w", err)
 		}
+		if p.Len > uint32(len(p.Data)) {
+			return nil, fmt.Errorf("PIPE payload 长度超出缓冲区: %d", p.Len)
+		}
+		if p.Dir > 1 {
+			return nil, fmt.Errorf("PIPE payload 方向无效: %d", p.Dir)
+		}
 		e.Pipe = p
 	case EventTypeDNS:
 		if len(payload) < dnsPayloadSize {
