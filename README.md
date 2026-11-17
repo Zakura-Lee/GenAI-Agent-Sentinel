@@ -1,7 +1,7 @@
 # ADR — GenAI Agent Detection & Response
 
-- **版本**：v0.1.2
-- **日期**：2026-11-17
+- **版本**：v0.1.1
+- **日期**：2026-11-02
 - **角色**：Zakura-Lee
 
 ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营平台**，融合 EDR / SIEM / SOAR 三类能力：
@@ -28,9 +28,8 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **阶段 0**（环境与工程基础）：独立 Go 工具链、单入口 `cmd/adr`、核心依赖。
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
-- ✅ **用户态注入**：agent 启动扫描 `/proc`，按规则识别 Agent 进程并注入 taint。
-- ✅ **阶段 2**（本地规则引擎）：YAML 规则 + 条件匹配 + fsnotify 热更新，agent 已接入告警与 taint 注入。
-- ⏳ **下一阶段**：单文件打包 + 本地端到端验证（阶段 3）。
+- ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
+- ⏳ **下一阶段**：本地规则引擎（`internal/rule`）。
 
 ## 目录结构
 
@@ -39,8 +38,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 | `ebpf/` | 内核态检测程序（`src/adr.bpf.c` 程序集） | C + eBPF (libbpf / CO-RE) |
 | `cmd/adr/` | 单入口（`server` / `agent` / `audit` 子命令） | Go |
 | `internal/egress/` | eBPF 加载器与事件解析（cilium/ebpf） | Go |
-| `internal/rule/` | 规则引擎（YAML + fsnotify 热更新） | Go |
-| `rules/` | 默认规则集（YAML） | YAML |
+| `internal/rule/` | 规则引擎（下一阶段） | Go |
 | `internal/` 其余 | transport / store / soar / audit / web 骨架 | Go |
 | `frontend/` | 可视化前端 | React + TypeScript + Vite |
 | `db/` | 数据库 schema 与迁移 | PostgreSQL + pgvector |
@@ -67,8 +65,8 @@ make build
 
 # 5) 运行 agent（加载 eBPF，需 root 或 CAP_BPF；LSM 拦截另需内核 lsm=bpf）
 sudo go run ./cmd/adr agent
-#    规则文件默认 rules/default.yaml，可用 ADR_RULES 指定；修改后自动热更新
-sudo ADR_RULES=/path/to/rules.yaml go run ./cmd/adr agent
+#    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
+sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
 ```
 
 > 仓库：https://github.com/Zakura-Lee/GenAI-Agent-Sentinel（Go 模块路径 `github.com/Zakura-Lee/GenAI-Agent-Sentinel`）。
@@ -91,5 +89,4 @@ sudo ADR_RULES=/path/to/rules.yaml go run ./cmd/adr agent
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |
-| [`docs/rule-engine.md`](docs/rule-engine.md) | 本地规则引擎：规则模型、判定流程、热更新与 agent 集成 |
 | [`Problem.md`](Problem.md) | 开发期间问题与解决方法记录 |
