@@ -13,6 +13,8 @@ enum adr_event_type {
 	ADR_EVENT_PIPE = 4,
 	ADR_EVENT_DNS  = 5,
 	ADR_EVENT_SNI  = 6,
+	ADR_EVENT_FILE = 7,
+	ADR_EVENT_NET  = 8,
 };
 
 // adr_taint 污点信息（32 字节，8 对齐）
@@ -93,6 +95,25 @@ struct adr_dns_payload {
 // adr_sni_payload SNI 事件 payload
 struct adr_sni_payload {
 	char server_name[ADR_NAME_LEN];
+};
+
+// adr_file_payload FILE 事件 payload（openat / mmap）
+struct adr_file_payload {
+	__u32 op;                 // 0=open, 1=mmap
+	__u32 dirfd;              // openat 的 dirfd（AT_FDCWD=-100）
+	__u32 flags;              // openat flags / mmap prot
+	__u32 fd;                 // mmap 的 fd（open 为 0）
+	__u32 len;                // mmap 长度（open 为 0）
+	char  path[ADR_NAME_LEN]; // open 的 filename（可能相对）；mmap 留空由用户态补
+};
+
+// adr_net_payload NET 事件 payload（connect / bind / listen）
+struct adr_net_payload {
+	__u32 op;       // 0=connect, 1=bind, 2=listen
+	__u32 family;   // AF_INET / AF_INET6
+	__u32 port;     // 端口（主机字节序）
+	__u32 fd;       // 关联 fd
+	__u8  addr[16]; // IPv4 用前 4 字节，IPv6 全 16
 };
 
 #endif // __ADR_EVENT_H

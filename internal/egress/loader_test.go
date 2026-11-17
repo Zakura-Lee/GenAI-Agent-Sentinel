@@ -71,3 +71,50 @@ func TestParseEventTooShort(t *testing.T) {
 		t.Fatal("期望过短事件返回错误")
 	}
 }
+
+// TestParseFileEvent 验证 FILE 事件（openat）能正确解析。
+func TestParseFileEvent(t *testing.T) {
+	raw := make([]byte, AdrEventHeaderSize+filePayloadSize)
+	binary.LittleEndian.PutUint32(raw[8:12], EventTypeFile)
+	binary.LittleEndian.PutUint32(raw[12:16], 300) // pid
+	// payload 起始于 64：op/dirfd/flags/fd/len + path[256]
+	binary.LittleEndian.PutUint32(raw[64:68], 0)
+	binary.LittleEndian.PutUint32(raw[68:72], 0xffffff9c) // AT_FDCWD
+	binary.LittleEndian.PutUint32(raw[72:76], 0x80000)    // O_CLOEXEC
+	copy(raw[84:], "/models/qwen.gguf")
+
+	e, err := parseEvent(raw)
+	if err != nil {
+		t.Fatalf("parseEvent 失败: %v", err)
+	}
+	if e.Header.Type != EventTypeFile || e.File == nil {
+		t.Fatalf("FILE 事件解析错误: %+v", e.Header)
+	}
+	if got := string(bytes.TrimRight(e.File.Path[:], "\x00")); got != "/models/qwen.gguf" {
+		t.Fatalf("path = %q，期望 /models/qwen.gguf", got)
+	}
+}
+
+// TestParseNetEvent 验证 NET 事件（bind）能正确解析。
+func TestParseNetEvent(t *testing.T) {
+	raw := make([]byte, AdrEventHeaderSize+netPayloadSize)
+	binary.LittleEndian.PutUint32(raw[8:12], EventTypeNet)
+	binary.LittleEndian.PutUint32(raw[12:16], 400) // pid
+	// payload 起始于 64：op/family/port/fd + addr[16]
+	binary.LittleEndian.PutUint32(raw[64:68], 1)    // bind
+	binary.LittleEndian.PutUint32(raw[68:72], 2)    // AF_INET
+	binary.LittleEndian.PutUint32(raw[72:76], 8080) // port
+	binary.LittleEndian.PutUint32(raw[76:80], 5)    // fd
+	copy(raw[80:84], []byte{127, 0, 0, 1})
+
+	e, err := parseEvent(raw)
+	if err != nil {
+		t.Fatalf("parseEvent 失败: %v", err)
+	}
+	if e.Header.Type != EventTypeNet || e.Net == nil {
+		t.Fatalf("NET 事件解析错误: %+v", e.Header)
+	}
+	if e.Net.Port != 8080 || e.Net.Family != 2 {
+		t.Fatalf("net = %+v", e.Net)
+	}
+}
