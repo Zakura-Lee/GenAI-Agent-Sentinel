@@ -174,9 +174,10 @@ static __always_inline int handle_dns(const char *dns, long remain)
 	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(p, 0, sizeof(*p));
 
-	// 读原始 qname（跳过 12 字节 DNS header），固定大小；label 解析交给用户态
+	// 读原始 qname（跳过 12 字节 DNS header），用 _str 读到 qname 末尾的 0（label 长度 0）
+	// 不能用 bpf_probe_read_user 固定读 ADR_NAME_LEN：DNS 包通常远小于 256 字节，越界会导致整段读取失败
 	if (remain > 12)
-		bpf_probe_read_user(p->qname, ADR_NAME_LEN, dns + 12);
+		bpf_probe_read_user_str(p->qname, ADR_NAME_LEN, dns + 12);
 
 	bpf_ringbuf_submit(hdr, 0);
 	return 0;

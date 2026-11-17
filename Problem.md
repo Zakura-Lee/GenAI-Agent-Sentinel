@@ -1,6 +1,6 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.5
+- **版本**：v0.1.6
 - **日期**：2026-11-17
 - **角色**：Zakura-Lee
 
@@ -117,3 +117,8 @@
 - **现象**：`MarkTaint`/`GetTaint` 定义了但全仓无调用点，agent 运行时 taints map 永远为空
 - **原因**：阶段 1 聚焦 eBPF 观测与 taint 继承/拦截，用户态注入（agent 上报进程标记）未实现
 - **解决**：新增 `ReadStartTicks`（读 `/proc/<pid>/stat`）；agent 启动扫描 `/proc` 按 comm 白名单 `MarkTaint`；支持 `ADR_AGENT_WHITELIST` 扩展
+
+### 23. DNS qname 为空
+- **现象**：agent 输出 `dns pid=3298 qname=`（qname 全空）
+- **原因**：`handle_dns` 用 `bpf_probe_read_user` 固定读 `ADR_NAME_LEN`（256 字节），DNS 包通常远小于 256 字节，从 offset 12 越界导致整段读取失败，qname 保持 memset 的 0
+- **解决**：改用 `bpf_probe_read_user_str`，读到 qname 末尾的 0（label 长度 0）停止，不越界
