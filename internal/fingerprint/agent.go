@@ -104,12 +104,17 @@ func matchesAgent(sig agentSignature, comm, cmdline string) bool {
 	return false
 }
 
-// existingFiles 返回存在的配置路径（`~` 与相对 cwd 展开）。
+// existingFiles 返回存在的配置路径（`~` 与相对 cwd 展开），按完整路径去重。
 func existingFiles(paths []string, cwd string) []string {
+	seen := map[string]bool{}
 	var out []string
 	for _, p := range paths {
 		full := expandPath(p, cwd)
+		if seen[full] {
+			continue
+		}
 		if _, err := os.Stat(full); err == nil {
+			seen[full] = true
 			out = append(out, full)
 		}
 	}

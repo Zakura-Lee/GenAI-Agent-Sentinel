@@ -90,3 +90,20 @@ func TestModelFromCmdline(t *testing.T) {
 		}
 	}
 }
+
+// TestExistingFilesDedup 验证同一配置文件不会被重复列出。
+func TestExistingFilesDedup(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, ".claude", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := existingFiles([]string{cfg, ".claude/settings.json"}, dir)
+	if len(got) != 1 {
+		t.Fatalf("config_files = %v，期望去重为 1 个", got)
+	}
+}
