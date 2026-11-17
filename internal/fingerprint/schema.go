@@ -3,7 +3,7 @@ package fingerprint
 // Asset 为一条 AI 资产记录（对齐 CycloneDX ML-BOM 字段）。
 type Asset struct {
 	// 进程维度
-	Pid        uint32            `json:"pid"`
+	Pid        uint32            `json:"pid,omitempty"`
 	Ppid       uint32            `json:"ppid,omitempty"`
 	Comm       string            `json:"comm,omitempty"`
 	Exe        string            `json:"exe,omitempty"`

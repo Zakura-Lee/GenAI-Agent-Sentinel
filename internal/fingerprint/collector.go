@@ -96,19 +96,18 @@ func (c *Collector) Scan() ([]Asset, error) {
 		}
 	}
 
-	if len(assets) < 1024 {
-		for _, p := range ListenPorts() {
-			if c.ProbePorts {
-				if probed, err := ProbePort(p.Port); err == nil {
-					p.Service = probed.Service
-					p.Models = probed.Models
-				}
-			}
-			assets = append(assets, Asset{
-				ListenPorts: []PortInfo{p},
-				Source:      "port-scan",
-			})
+	// 监听端口：只列入 HTTP 探测成功的 AI 推理服务，避免 SSH/DNS/Redis 等噪音
+	for _, p := range ListenPorts() {
+		probed, err := ProbePort(p.Port)
+		if err != nil {
+			continue
 		}
+		p.Service = probed.Service
+		p.Models = probed.Models
+		assets = append(assets, Asset{
+			ListenPorts: []PortInfo{p},
+			Source:      "port-scan",
+		})
 	}
 
 	return assets, nil

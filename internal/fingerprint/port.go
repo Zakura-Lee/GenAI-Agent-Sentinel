@@ -89,7 +89,7 @@ func hexToBytes(s string) ([]byte, error) {
 	return out, nil
 }
 
-// ProbePort 对本地端口做 HTTP 探测（Ollama / OpenAI 兼容 / health）。
+// ProbePort 对本地端口做 HTTP 探测，只认 AI 推理服务的明确特征。
 func ProbePort(port uint32) (*PortInfo, error) {
 	client := &http.Client{Timeout: 2 * time.Second}
 	base := fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -99,12 +99,6 @@ func ProbePort(port uint32) (*PortInfo, error) {
 	}
 	if models, ok := probeModelJSON(client, base+"/v1/models", "data", "id"); ok {
 		return &PortInfo{Port: port, Service: "openai-compat", Models: models}, nil
-	}
-	if resp, err := client.Get(base + "/health"); err == nil {
-		resp.Body.Close()
-		if resp.StatusCode == http.StatusOK {
-			return &PortInfo{Port: port, Service: "unknown"}, nil
-		}
 	}
 	return nil, fmt.Errorf("端口 %d 未识别为推理服务", port)
 }
