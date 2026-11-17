@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
@@ -64,6 +65,8 @@ func runAgent() error {
 		}
 	}()
 
+	markAgentProcesses(l)
+
 	fmt.Println("ADR agent 已启动，等待事件...")
 	for {
 		e, err := l.Read()
@@ -88,6 +91,69 @@ func runAgent() error {
 			fmt.Printf("event type=%d pid=%d\n", e.Header.Type, e.Header.Pid)
 		}
 	}
+}
+
+// defaultAgentWhitelist 默认识别的 GenAI Agent 进程名（comm）。
+var defaultAgentWhitelist = []string{"claude", "codex", "cursor", "continue", "copilot", "aider"}
+
+// markAgentProcesses 扫描 /proc，按 comm 白名单为现有 Agent 进程写入 taint。
+// 额外白名单可通过 ADR_AGENT_WHITELIST（逗号分隔）注入。
+func markAgentProcesses(l *egress.Loader) {
+	whitelist := defaultAgentWhitelist
+	if extra := os.Getenv("ADR_AGENT_WHITELIST"); extra != "" {
+		whitelist = append(append([]string{}, whitelist...), strings.Split(extra, ",")...)
+	}
+
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "扫描 /proc 失败:", err)
+		return
+	}
+
+	marked := 0
+	for _, e := range entries {
+		pid64, err := strconv.ParseUint(e.Name(), 10, 32)
+		if err != nil {
+			continue
+		}
+		pid := uint32(pid64)
+
+		comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(string(comm))
+		if !matchesWhitelist(name, whitelist) {
+			continue
+		}
+
+		ticks, err := egress.ReadStartTicks(pid)
+		if err != nil {
+			continue
+		}
+
+		key := egress.TaintKey{Tgid: pid, StartBoottime: ticks}
+		taint := egress.AdrTaint{SessionID: 1, AgentType: 1, Depth: 1}
+		if err := l.MarkTaint(key, taint); err != nil {
+			fmt.Fprintf(os.Stderr, "标记 pid=%d 失败: %v\n", pid, err)
+			continue
+		}
+		fmt.Printf("已标记 agent 进程: pid=%d comm=%s\n", pid, name)
+		marked++
+	}
+	if marked > 0 {
+		fmt.Printf("共标记 %d 个 agent 进程\n", marked)
+	}
+}
+
+// matchesWhitelist 判断 comm 是否命中白名单（精确匹配）。
+func matchesWhitelist(name string, whitelist []string) bool {
+	for _, w := range whitelist {
+		if name == strings.TrimSpace(w) {
+			return true
+		}
+	}
+	return false
 }
 
 // printExec 打印 EXEC 事件（envp 中敏感变量值脱敏）。
