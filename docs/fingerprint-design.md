@@ -1,6 +1,6 @@
 # 指纹检测（端点 AI 资产发现）设计
 
-- **版本**：v0.1.0
+- **版本**：v0.2.0
 - **日期**：2026-11-17
 - **角色**：Zakura-Lee
 
@@ -93,13 +93,33 @@ struct adr_net_payload {
 | bind | `net op=bind port=8000` |
 | listen | `net op=listen` |
 
-## 4. 阶段 B：用户态富化（计划）
+## 4. 阶段 B：用户态富化（已实现）
 
-- `/proc/<pid>/{cwd,cgroup,ns,fd,maps}` enrichment
-- environ 白名单：`HF_HOME` / `OLLAMA_MODELS` / `CUDA_VISIBLE_DEVICES` / `TRANSFORMERS_CACHE`
-- 文件扫描：常见模型目录 + 魔数 + GGUF/safetensors 元数据 + **采样哈希**（头 1MB + 尾 1MB + size）
-- 端口三路：eBPF `bind`/`listen` + 用户态 `ss` 快照 + HTTP 探测（`/api/tags`、`/v1/models`、`/health`）
-- GPU：`nvidia-smi` / NVML
+包结构（`internal/fingerprint`）：
+
+| 文件 | 职责 |
+|---|---|
+| `schema.go` | CycloneDX ML-BOM 对齐的 `Asset` / `ModelFile` / `PortInfo` / `GPUInfo` |
+| `proc.go` | `/proc/<pid>` enrichment：stat/cmdline/exe/cwd/status/cgroup/ns/environ（白名单）/fd/maps |
+| `file.go` | 模型文件指纹：魔数（GGUF/HDF5/PyTorch ZIP/pickle/safetensors/ONNX）+ GGUF/safetensors 元数据 + 采样哈希 |
+| `port.go` | 监听端口（`/proc/net/tcp`/`tcp6`）+ HTTP 探测（`/api/tags`、`/v1/models`、`/health`） |
+| `gpu.go` | GPU 占用（`nvidia-smi --query-compute-apps`） |
+| `collector.go` | 编排：`/proc` 扫描 + AI 进程识别 + 文件/端口/GPU 关联 + JSON 输出 |
+
+CLI：
+
+```bash
+adr fingerprint                        # 默认 30 秒间隔，输出 JSON
+ADR_FP_INTERVAL=10s adr fingerprint    # 自定义间隔，Ctrl+C 退出
+```
+
+关键实现：
+
+- **environ 白名单**：只采集 `HF_HOME`/`OLLAMA_MODELS`/`CUDA_VISIBLE_DEVICES`/`TRANSFORMERS_CACHE` 等 AI 相关变量，避免泄露密钥
+- **采样哈希**：头 1MB + 尾 1MB + size，大模型不全文读取
+- **AI 进程识别**：comm/cmdline 匹配 ollama/llama-server/vllm/sglang/tgi/triton 等推理栈
+- **GPU 关联**：按 pid 关联 `nvidia-smi` 的显存占用
+- **端口探测**：`/proc/net/tcp` 的 `st=0A` 即 LISTEN，再对 127.0.0.1 发 HTTP 探测
 
 ## 5. Schema
 

@@ -29,6 +29,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
 - ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
+- ✅ **指纹采集（阶段 A+B）**：5 个 eBPF hook（openat/mmap/connect/bind/listen）+ 用户态富化（/proc/模型文件/端口/GPU），`adr fingerprint` 输出 JSON 资产清单。
 - ⏳ **下一阶段**：本地规则引擎（`internal/rule`）。
 
 ## 目录结构
@@ -38,6 +39,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 | `ebpf/` | 内核态检测程序（`src/adr.bpf.c` 程序集） | C + eBPF (libbpf / CO-RE) |
 | `cmd/adr/` | 单入口（`server` / `agent` / `audit` 子命令） | Go |
 | `internal/egress/` | eBPF 加载器与事件解析（cilium/ebpf） | Go |
+| `internal/fingerprint/` | AI 资产发现（/proc 富化 + 模型文件 + 端口 + GPU） | Go |
 | `internal/rule/` | 规则引擎（下一阶段） | Go |
 | `internal/` 其余 | transport / store / soar / audit / web 骨架 | Go |
 | `frontend/` | 可视化前端 | React + TypeScript + Vite |
@@ -67,6 +69,10 @@ make build
 sudo go run ./cmd/adr agent
 #    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
 sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
+
+# 6) AI 资产发现（指纹扫描，输出 JSON；Ctrl+C 退出）
+go run ./cmd/adr fingerprint
+#    可通过 ADR_FP_INTERVAL 调整扫描间隔（如 10s）
 ```
 
 > 仓库：https://github.com/Zakura-Lee/GenAI-Agent-Sentinel（Go 模块路径 `github.com/Zakura-Lee/GenAI-Agent-Sentinel`）。
