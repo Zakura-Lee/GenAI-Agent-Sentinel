@@ -1,6 +1,6 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.7
+- **版本**：v0.1.8
 - **日期**：2026-11-17
 - **角色**：Zakura-Lee
 
@@ -124,3 +124,8 @@
   - `bpf_probe_read_user` 读 → 读到 DNS header 垃圾（`iov_len=0x6E6F6C6C00000000`，ASCII "noll"）
   - `bpf_probe_read_kernel` 读 → 用内核 helper 读用户态地址 → 失败 → 事件消失
 - **解决**：新增 `get_first_iov()`，先读 `iter_type`：`ITER_UBUF` 用内嵌 `__ubuf_iovec`，其他用内核态 `__iov[]`；qname 内容用 `bpf_probe_read_user_str` 防短包越界
+
+### 24. openat 模型扩展名匹配失效（has_suffix 循环展开）
+- **现象**：`cat /tmp/test.gguf` 的 openat 不上报（无 `file op=open`），但 bind/listen 正常；用户态 C 测试相同算法返回 1
+- **根因**：`has_suffix` 用 `#pragma unroll` + 函数参数 `slen`（非编译期常量），eBPF 侧展开不完整，退化为运行期循环，运行期行为异常导致 `is_model_ext` 返回 0
+- **解决**：`is_model_ext` 改为直接比较末尾字节（无循环），verifier 友好；移除临时 `bpf_printk` 调试探针

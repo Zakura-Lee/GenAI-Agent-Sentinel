@@ -8,6 +8,8 @@ const (
 	EventTypePipe = 4
 	EventTypeDNS  = 5
 	EventTypeSNI  = 6
+	EventTypeFile = 7
+	EventTypeNet  = 8
 )
 
 // AdrEventHeaderSize 为事件公共头字节大小。
@@ -81,6 +83,25 @@ type ForkPayload struct {
 	CloneFlags uint64
 }
 
+// FilePayload 对应 C 侧 struct adr_file_payload（openat / mmap）。
+type FilePayload struct {
+	Op    uint32 // 0=open, 1=mmap
+	Dirfd uint32
+	Flags uint32
+	Fd    uint32
+	Len   uint32
+	Path  [256]byte
+}
+
+// NetPayload 对应 C 侧 struct adr_net_payload（connect / bind / listen）。
+type NetPayload struct {
+	Op     uint32 // 0=connect, 1=bind, 2=listen
+	Family uint32
+	Port   uint32
+	Fd     uint32
+	Addr   [16]byte
+}
+
 // Event 为一条已解析的事件：公共头 + 按 type 解析的 payload。
 type Event struct {
 	Header AdrEventHeader
@@ -90,4 +111,6 @@ type Event struct {
 	Sni    *SniPayload
 	Exit   *ExitPayload
 	Fork   *ForkPayload
+	File   *FilePayload
+	Net    *NetPayload
 }

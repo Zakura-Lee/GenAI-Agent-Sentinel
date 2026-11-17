@@ -1,6 +1,6 @@
 # eBPF 层协议 v0
 
-- **版本**：v0.1.3
+- **版本**：v0.1.4
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：草案（MCP pipe 与 taint 继承共同引用）
@@ -28,6 +28,8 @@
 | 4 | `PIPE` | 管道读写（MCP stdio 关联） |
 | 5 | `DNS` | UDP 53 域名解析 |
 | 6 | `SNI` | TLS ClientHello SNI |
+| 7 | `FILE` | 文件打开/映射（openat / mmap） |
+| 8 | `NET` | 网络连接/监听（connect / bind / listen） |
 
 ### 3.2 事件公共头（64 字节，8 对齐）
 
@@ -67,6 +69,8 @@ struct adr_taint {
 | `PIPE` | `ino u64` + `len u32` + `dir u32`(0=读,1=写) + `data[128]`（截断载荷；配对键用 pipe inode 号，fentry 拿不到 fd） |
 | `DNS` | `qname[256]` |
 | `SNI` | `server_name[256]` |
+| `FILE` | `op u32`(0=open,1=mmap) + `dirfd u32` + `flags u32` + `fd u32` + `len u32` + `path[256]` |
+| `NET` | `op u32`(0=connect,1=bind,2=listen) + `family u32` + `port u32` + `fd u32` + `addr[16]` |
 
 > 字节布局两侧（C/Go）必须一致，由 `internal/egress` 单测锁定。现有扁平 `ExecveEvent` 将在步骤 2 迁移到「公共头 + payload」结构。
 

@@ -19,6 +19,8 @@ const (
 	sniPayloadSize  = 256
 	exitPayloadSize = 4 + 4 + 8 // exit_code + pad + duration_ns
 	forkPayloadSize = 4 + 4 + 8 // child_pid + pad + clone_flags
+	filePayloadSize = 4*5 + 256 // op/dirfd/flags/fd/len + path[256]
+	netPayloadSize  = 4*4 + 16  // op/family/port/fd + addr[16]
 )
 
 // Loader 负责加载 eBPF 程序集、挂载各类 hook 并读取事件。
@@ -57,6 +59,11 @@ func Load(obj []byte) (*Loader, error) {
 		{name: "taint_deny_open", prog: coll.Programs["taint_deny_open"], kind: attachLSM},
 		{name: "trace_exit", prog: coll.Programs["trace_exit"], kind: attachTracepoint, group: "sched", tp: "sched_process_exit"},
 		{name: "trace_fork", prog: coll.Programs["trace_fork"], kind: attachTracepoint, group: "sched", tp: "sched_process_fork"},
+		{name: "trace_openat", prog: coll.Programs["trace_openat"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_openat"},
+		{name: "trace_mmap", prog: coll.Programs["trace_mmap"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_mmap"},
+		{name: "trace_connect", prog: coll.Programs["trace_connect"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_connect"},
+		{name: "trace_bind", prog: coll.Programs["trace_bind"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_bind"},
+		{name: "trace_listen", prog: coll.Programs["trace_listen"], kind: attachTracepoint, group: "syscalls", tp: "sys_enter_listen"},
 	}
 	for _, a := range attaches {
 		if a.prog == nil {
@@ -206,6 +213,24 @@ func parseEvent(raw []byte) (*Event, error) {
 			return nil, fmt.Errorf("解析 FORK payload: %w", err)
 		}
 		e.Fork = p
+	case EventTypeFile:
+		if len(payload) < filePayloadSize {
+			return nil, fmt.Errorf("FILE payload 过短: %d 字节", len(payload))
+		}
+		p := new(FilePayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 FILE payload: %w", err)
+		}
+		e.File = p
+	case EventTypeNet:
+		if len(payload) < netPayloadSize {
+			return nil, fmt.Errorf("NET payload 过短: %d 字节", len(payload))
+		}
+		p := new(NetPayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 NET payload: %w", err)
+		}
+		e.Net = p
 	default:
 		// 未知事件类型，忽略 payload
 	}

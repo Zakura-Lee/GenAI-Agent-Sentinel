@@ -89,4 +89,5 @@ sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |
+| [`docs/fingerprint-design.md`](docs/fingerprint-design.md) | 指纹检测（端点 AI 资产发现）：五层模型、hook 矩阵、验证结果 |
 | [`Problem.md`](Problem.md) | 开发期间问题与解决方法记录 |

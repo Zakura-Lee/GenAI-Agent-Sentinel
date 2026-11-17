@@ -16,6 +16,8 @@ func TestEventLayoutSize(t *testing.T) {
 		{"AdrTaint", unsafe.Sizeof(AdrTaint{}), 32},
 		{"ExecPayload", unsafe.Sizeof(ExecPayload{}), 16 + 256 + 512},
 		{"PipePayload", unsafe.Sizeof(PipePayload{}), 8 + 4 + 4 + 128},
+		{"FilePayload", unsafe.Sizeof(FilePayload{}), 4*5 + 256},
+		{"NetPayload", unsafe.Sizeof(NetPayload{}), 4*4 + 16},
 	}
 	for _, c := range cases {
 		if c.got != c.want {
