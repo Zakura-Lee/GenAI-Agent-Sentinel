@@ -74,6 +74,10 @@ func runAgent() error {
 		switch e.Header.Type {
 		case egress.EventTypeExec:
 			printExec(e)
+		case egress.EventTypeExit:
+			printExit(e)
+		case egress.EventTypeFork:
+			printFork(e)
 		case egress.EventTypePipe:
 			printPipe(e)
 		case egress.EventTypeDNS:
@@ -130,6 +134,17 @@ func parseDNSQname(raw []byte) string {
 // printSNI 打印 SNI 事件。
 func printSNI(e *egress.Event) {
 	fmt.Printf("sni pid=%d server_name=%s\n", e.Header.Pid, cstr(e.Sni.ServerName[:]))
+}
+
+// printExit 打印 EXIT 事件。
+func printExit(e *egress.Event) {
+	fmt.Printf("exit pid=%d exit_code=%d duration_ms=%d\n",
+		e.Header.Pid, e.Exit.ExitCode, e.Exit.DurationNs/1e6)
+}
+
+// printFork 打印 FORK 事件。
+func printFork(e *egress.Event) {
+	fmt.Printf("fork ppid=%d child_pid=%d\n", e.Header.Pid, e.Fork.ChildPid)
 }
 
 // cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。

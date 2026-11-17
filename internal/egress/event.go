@@ -67,6 +67,20 @@ type SniPayload struct {
 	ServerName [256]byte
 }
 
+// ExitPayload 对应 C 侧 struct adr_exit_payload。
+type ExitPayload struct {
+	ExitCode   uint32
+	Pad        uint32
+	DurationNs uint64
+}
+
+// ForkPayload 对应 C 侧 struct adr_fork_payload。
+type ForkPayload struct {
+	ChildPid   uint32
+	Pad        uint32
+	CloneFlags uint64
+}
+
 // Event 为一条已解析的事件：公共头 + 按 type 解析的 payload。
 type Event struct {
 	Header AdrEventHeader
@@ -74,4 +88,6 @@ type Event struct {
 	Pipe   *PipePayload
 	Dns    *DnsPayload
 	Sni    *SniPayload
+	Exit   *ExitPayload
+	Fork   *ForkPayload
 }

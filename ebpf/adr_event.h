@@ -63,6 +63,20 @@ struct adr_exec_payload {
 	char envp[ENVP_SLOTS][SLOT_SIZE];
 };
 
+// adr_exit_payload EXIT 事件 payload
+struct adr_exit_payload {
+	__u32 exit_code;
+	__u32 pad;
+	__u64 duration_ns;
+};
+
+// adr_fork_payload FORK 事件 payload（头中 pid 为父进程）
+struct adr_fork_payload {
+	__u32 child_pid;
+	__u32 pad;
+	__u64 clone_flags; // sched_process_fork tracepoint 暂不提供，置 0
+};
+
 // adr_pipe_payload PIPE 事件 payload
 struct adr_pipe_payload {
 	__u64 ino; // pipe inode 号（配对键）
