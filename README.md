@@ -28,6 +28,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **阶段 0**（环境与工程基础）：独立 Go 工具链、单入口 `cmd/adr`、核心依赖。
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
+- ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
 - ⏳ **下一阶段**：本地规则引擎（`internal/rule`）。
 
 ## 目录结构
@@ -64,6 +65,8 @@ make build
 
 # 5) 运行 agent（加载 eBPF，需 root 或 CAP_BPF；LSM 拦截另需内核 lsm=bpf）
 sudo go run ./cmd/adr agent
+#    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
+sudo ADR_AGENT_WHITELIST=my-agent go run ./cmd/adr agent
 ```
 
 > 仓库：https://github.com/Zakura-Lee/GenAI-Agent-Sentinel（Go 模块路径 `github.com/Zakura-Lee/GenAI-Agent-Sentinel`）。

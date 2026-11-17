@@ -157,6 +157,36 @@ int BPF_PROG(vfs_read_exit, struct file *file, char *buf, size_t count, loff_t *
 	return handle_pipe_io(file, buf, (size_t)ret, 0);
 }
 
+// get_first_iov 读取 msghdr 的第一个 iovec，兼容 ITER_UBUF（内嵌 iovec）与 ITER_IOVEC（内核态 iovec 数组）。
+// 返回 0 成功，-1 失败。
+static __always_inline int get_first_iov(struct msghdr *msg, const char **base, size_t *len, size_t *off)
+{
+	u8 iter_type = 0;
+	if (bpf_core_read(&iter_type, sizeof(iter_type), &msg->msg_iter.iter_type) < 0)
+		return -1;
+	if (bpf_core_read(off, sizeof(*off), &msg->msg_iter.iov_offset) < 0)
+		return -1;
+
+	// ITER_UBUF：单个用户 buffer，iovec 内嵌在 iov_iter 中（与 __iov 共用 offset）
+	if (iter_type == ITER_UBUF) {
+		if (bpf_core_read(base, sizeof(*base), &msg->msg_iter.__ubuf_iovec.iov_base) < 0)
+			return -1;
+		if (bpf_core_read(len, sizeof(*len), &msg->msg_iter.__ubuf_iovec.iov_len) < 0)
+			return -1;
+		return 0;
+	}
+
+	// 其他类型（ITER_IOVEC 等）：iovec 数组在内核态
+	const struct iovec *iov = NULL;
+	if (bpf_core_read(&iov, sizeof(iov), &msg->msg_iter.__iov) < 0)
+		return -1;
+	if (bpf_probe_read_kernel(base, sizeof(*base), &iov[0].iov_base) < 0)
+		return -1;
+	if (bpf_probe_read_kernel(len, sizeof(*len), &iov[0].iov_len) < 0)
+		return -1;
+	return 0;
+}
+
 // handle_dns 读取 DNS query 的原始 qname（label 格式），固定大小读，变长解析留给用户态。
 static __always_inline int handle_dns(const char *dns, long remain)
 {
@@ -174,9 +204,10 @@ static __always_inline int handle_dns(const char *dns, long remain)
 	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(p, 0, sizeof(*p));
 
-	// 读原始 qname（跳过 12 字节 DNS header），固定大小；label 解析交给用户态
+	// 读原始 qname（跳过 12 字节 DNS header），用 _str 读到 qname 末尾的 0（label 长度 0）
+	// 不能用 bpf_probe_read_user 固定读 ADR_NAME_LEN：DNS 包通常远小于 256 字节，越界会导致整段读取失败
 	if (remain > 12)
-		bpf_probe_read_user(p->qname, ADR_NAME_LEN, dns + 12);
+		bpf_probe_read_user_str(p->qname, ADR_NAME_LEN, dns + 12);
 
 	bpf_ringbuf_submit(hdr, 0);
 	return 0;
@@ -191,18 +222,10 @@ int BPF_PROG(udp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t len)
 	if (dport != bpf_htons(53))
 		return 0;
 
-	const struct iovec *iov = NULL;
-	size_t iov_off = 0;
-	if (bpf_core_read(&iov, sizeof(iov), &msg->msg_iter.__iov) < 0)
-		return 0;
-	if (bpf_core_read(&iov_off, sizeof(iov_off), &msg->msg_iter.iov_offset) < 0)
-		return 0;
-
 	const char *base = NULL;
 	size_t iov_len = 0;
-	if (bpf_probe_read_user(&base, sizeof(base), &iov[0].iov_base) < 0)
-		return 0;
-	if (bpf_probe_read_user(&iov_len, sizeof(iov_len), &iov[0].iov_len) < 0)
+	size_t iov_off = 0;
+	if (get_first_iov(msg, &base, &iov_len, &iov_off) < 0)
 		return 0;
 
 	if (!base || iov_off >= iov_len || iov_len - iov_off < 13)
@@ -311,18 +334,10 @@ static __always_inline int handle_tls_sni(const char *data, long len)
 SEC("fentry/tcp_sendmsg")
 int BPF_PROG(tcp_sendmsg_entry, struct sock *sk, struct msghdr *msg, size_t size)
 {
-	const struct iovec *iov = NULL;
-	size_t iov_off = 0;
 	const char *base = NULL;
 	size_t iov_len = 0;
-
-	if (bpf_core_read(&iov, sizeof(iov), &msg->msg_iter.__iov) < 0)
-		return 0;
-	if (bpf_core_read(&iov_off, sizeof(iov_off), &msg->msg_iter.iov_offset) < 0)
-		return 0;
-	if (bpf_probe_read_user(&base, sizeof(base), &iov[0].iov_base) < 0)
-		return 0;
-	if (bpf_probe_read_user(&iov_len, sizeof(iov_len), &iov[0].iov_len) < 0)
+	size_t iov_off = 0;
+	if (get_first_iov(msg, &base, &iov_len, &iov_off) < 0)
 		return 0;
 	if (!base || iov_off >= iov_len)
 		return 0;

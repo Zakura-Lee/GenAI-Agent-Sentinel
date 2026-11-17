@@ -1,7 +1,7 @@
 # 开发问题记录（Problem.md）
 
-- **版本**：v0.1.4
-- **日期**：2026-11-14
+- **版本**：v0.1.7
+- **日期**：2026-11-17
 - **角色**：Zakura-Lee
 
 > 记录 ADR 开发期间遇到的问题与解决方法，供后续开发避坑。
@@ -112,3 +112,15 @@
 - **现象**：argv/envp 解析错位
 - **原因**：C 侧槽位从 `[8][32]/[16][32]` 改为 `[6][64]/[6][64]` 时，Go 侧 `ExecPayload` 未同步；总大小都是 784 但内部布局不同（argv 384/256、envp 384/512）
 - **解决**：Go 侧 `ExecPayload` 同步为 `Argv [6][64]byte` / `Envp [6][64]byte`，`execPayloadSize` 改为 `16 + 6*64 + 6*64`
+
+### 22. 用户态显式注入未实现（taint 链路悬空）
+- **现象**：`MarkTaint`/`GetTaint` 定义了但全仓无调用点，agent 运行时 taints map 永远为空
+- **原因**：阶段 1 聚焦 eBPF 观测与 taint 继承/拦截，用户态注入（agent 上报进程标记）未实现
+- **解决**：新增 `ReadStartTicks`（读 `/proc/<pid>/stat`）；agent 启动扫描 `/proc` 按 comm 白名单 `MarkTaint`；支持 `ADR_AGENT_WHITELIST` 扩展
+
+### 23. DNS qname 为空（ITER_UBUF 下读错 iovec）
+- **现象**：agent 输出 `dns pid=... qname=`（空）；改用 `_str` 后变成 DNS 事件完全消失
+- **根因**：`udp_sendmsg` 的 `msg_iter` 用 `ITER_UBUF`（内核 6.1+ 单用户 buffer 优化），此时 `__iov` 位置实际是 `__ubuf_iovec.iov_base`（用户态 DNS 包指针）。代码把 `__iov` 当 iovec 数组读：
+  - `bpf_probe_read_user` 读 → 读到 DNS header 垃圾（`iov_len=0x6E6F6C6C00000000`，ASCII "noll"）
+  - `bpf_probe_read_kernel` 读 → 用内核 helper 读用户态地址 → 失败 → 事件消失
+- **解决**：新增 `get_first_iov()`，先读 `iter_type`：`ITER_UBUF` 用内嵌 `__ubuf_iovec`，其他用内核态 `__iov[]`；qname 内容用 `bpf_probe_read_user_str` 防短包越界

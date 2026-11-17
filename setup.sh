@@ -17,7 +17,6 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y \
   libbpf-dev libelf-dev zlib1g-dev libssl-dev libcap-dev \
   linux-tools-common \
   git gh \
-  python3-pip python3-venv \
   postgresql postgresql-contrib postgresql-16-pgvector redis-server
 
 echo "==> 启动并启用数据库服务"
