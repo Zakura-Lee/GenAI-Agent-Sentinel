@@ -365,18 +365,66 @@ int BPF_PROG(wake_up_new_task_entry, struct task_struct *task)
 	return 0;
 }
 
-// trace_exit 清理进程退出后的 taint，避免 pid 复用串号。
+// trace_exit 上报 EXIT 事件并清理进程退出后的 taint，避免 pid 复用串号。
 SEC("tracepoint/sched/sched_process_exit")
 int trace_exit(struct trace_event_raw_sched_process_exit *ctx)
 {
 	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 	struct adr_taint_key key;
+	struct adr_event_header *hdr;
+	struct adr_exit_payload *p;
+	__u32 size = sizeof(*hdr) + sizeof(*p);
 
+	// 先上报 EXIT（此时 taint 尚未清理，fill_common 能带上退出前的污点）
+	hdr = bpf_ringbuf_reserve(&events, size, 0);
+	if (hdr) {
+		fill_common(hdr, ADR_EVENT_EXIT);
+		hdr->ppid = 0;
+		hdr->uid = 0;
+		hdr->gid = 0;
+
+		p = (struct adr_exit_payload *)((void *)hdr + sizeof(*hdr));
+		p->exit_code = (__u32)BPF_CORE_READ(task, exit_code);
+		p->pad = 0;
+		// duration 用 monotonic 时钟（start_time 与 bpf_ktime_get_ns 同源）
+		__u64 start_ns = BPF_CORE_READ(task, start_time);
+		__u64 now_ns = bpf_ktime_get_ns();
+		p->duration_ns = now_ns > start_ns ? now_ns - start_ns : 0;
+
+		bpf_ringbuf_submit(hdr, 0);
+	}
+
+	// 再清理 taint
 	key.tgid = (__u32)ctx->pid;
 	key.pad = 0;
 	key.start_boottime = get_start_ticks(task);
-
 	bpf_map_delete_elem(&taints, &key);
+	return 0;
+}
+
+// trace_fork 上报 FORK 事件（头中 pid 为父进程，payload 为子进程 tgid）。
+SEC("tracepoint/sched/sched_process_fork")
+int trace_fork(struct trace_event_raw_sched_process_fork *ctx)
+{
+	struct adr_event_header *hdr;
+	struct adr_fork_payload *p;
+	__u32 size = sizeof(*hdr) + sizeof(*p);
+
+	hdr = bpf_ringbuf_reserve(&events, size, 0);
+	if (!hdr)
+		return 0;
+
+	fill_common(hdr, ADR_EVENT_FORK);
+	hdr->ppid = 0;
+	hdr->uid = 0;
+	hdr->gid = 0;
+
+	p = (struct adr_fork_payload *)((void *)hdr + sizeof(*hdr));
+	p->child_pid = (__u32)ctx->child_pid;
+	p->pad = 0;
+	p->clone_flags = 0; // sched_process_fork tracepoint 不提供 clone_flags
+
+	bpf_ringbuf_submit(hdr, 0);
 	return 0;
 }
 

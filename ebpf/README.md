@@ -13,7 +13,8 @@
 | `udp_sendmsg_entry` | fentry | DNS 识别（固定大小读原始 qname，用户态解析） |
 | `tcp_sendmsg_entry` | fentry | SNI 识别（TLS ClientHello） |
 | `wake_up_new_task_entry` | fentry | taint 继承（key 用 `group_leader->start_boottime` 归并线程组） |
-| `trace_exit` | tracepoint | 清理 taint（防 pid 复用串号） |
+| `trace_exit` | tracepoint | 上报 EXIT 事件 + 清理 taint（防 pid 复用串号） |
+| `trace_fork` | tracepoint | 上报 FORK 事件（父/子 tgid） |
 | `taint_deny_open` | LSM | tainted 进程打开哨兵文件返回 `-EPERM` |
 
 - `adr_event.h`：事件 ABI（公共头 + payload），对应 `docs/ebpf-protocol.md`

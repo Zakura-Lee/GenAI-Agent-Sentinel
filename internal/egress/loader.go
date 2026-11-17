@@ -17,6 +17,8 @@ const (
 	pipePayloadSize = 8 + 4 + 4 + 128
 	dnsPayloadSize  = 256
 	sniPayloadSize  = 256
+	exitPayloadSize = 4 + 4 + 8 // exit_code + pad + duration_ns
+	forkPayloadSize = 4 + 4 + 8 // child_pid + pad + clone_flags
 )
 
 // Loader 负责加载 eBPF 程序集、挂载各类 hook 并读取事件。
@@ -54,6 +56,7 @@ func Load(obj []byte) (*Loader, error) {
 		{name: "wake_up_new_task_entry", prog: coll.Programs["wake_up_new_task_entry"], kind: attachTracing},
 		{name: "taint_deny_open", prog: coll.Programs["taint_deny_open"], kind: attachLSM},
 		{name: "trace_exit", prog: coll.Programs["trace_exit"], kind: attachTracepoint, group: "sched", tp: "sched_process_exit"},
+		{name: "trace_fork", prog: coll.Programs["trace_fork"], kind: attachTracepoint, group: "sched", tp: "sched_process_fork"},
 	}
 	for _, a := range attaches {
 		if a.prog == nil {
@@ -185,6 +188,24 @@ func parseEvent(raw []byte) (*Event, error) {
 			return nil, fmt.Errorf("解析 SNI payload: %w", err)
 		}
 		e.Sni = p
+	case EventTypeExit:
+		if len(payload) < exitPayloadSize {
+			return nil, fmt.Errorf("EXIT payload 过短: %d 字节", len(payload))
+		}
+		p := new(ExitPayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 EXIT payload: %w", err)
+		}
+		e.Exit = p
+	case EventTypeFork:
+		if len(payload) < forkPayloadSize {
+			return nil, fmt.Errorf("FORK payload 过短: %d 字节", len(payload))
+		}
+		p := new(ForkPayload)
+		if err := binary.Read(bytes.NewReader(payload), binary.LittleEndian, p); err != nil {
+			return nil, fmt.Errorf("解析 FORK payload: %w", err)
+		}
+		e.Fork = p
 	default:
 		// 未知事件类型，忽略 payload
 	}
