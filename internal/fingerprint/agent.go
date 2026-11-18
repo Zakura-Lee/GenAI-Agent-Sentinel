@@ -73,6 +73,13 @@ var agentSignatures = []agentSignature{
 		Configs: []string{"~/.config/zed/settings.json", ".zed/settings.json"},
 		EnvKeys: []string{"ANTHROPIC_API_KEY", "OPENAI_API_KEY"},
 	},
+	{
+		Name:    "reasonix-studio",
+		Comms:   []string{"reasonix-studio", "reasonix studio"},
+		Cmdline: []string{"reasonix-studio"},
+		Configs: []string{"~/.reasonix/config.toml", "~/.config/Reasonix Studio/"},
+		EnvKeys: []string{"REASONIX_API_KEY"},
+	},
 }
 
 // IdentifyAgent 识别进程属于哪个 Agent/Harness，返回 harness 名、存在的配置文件与命中的环境变量名。

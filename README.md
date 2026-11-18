@@ -1,10 +1,10 @@
 # ADR — GenAI Agent Detection & Response
 
-- **版本**：v0.1.1
+- **版本**：v0.1.2
 - **日期**：2026-11-02
 - **角色**：Zakura-Lee
 
-ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营平台**，融合 EDR / SIEM / SOAR 三类能力：
+ADR 是一个面向 **GenAI Agent 的安全运营**平台，融合 EDR / SIEM / SOAR 三类能力：
 
 - **EDR（GenAI Agent 专用）**：内核态用 eBPF 捕获 Agent 行为，规则引擎实时判定，支持多设备接入。
 - **SIEM**：多设备日志汇聚、存储、检索与**实时监测**，安全运营工程师在平台直接查看日志。
