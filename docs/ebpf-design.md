@@ -1,7 +1,7 @@
 # eBPF 层设计
 
-- **版本**：v0.2.6
-- **日期**：2026-11-17
+- **版本**：v0.2.7
+- **日期**：2026-11-18
 - **角色**：Zakura-Lee
 - **状态**：设计草案（v2，已吸收评审意见）
 
@@ -197,6 +197,7 @@ comm, argv, env, cwd, policy_id, decision, rule_version, detail(jsonb)
 - 已实现 PIPE 关联：`vfs_write` fentry + `vfs_read` fexit，按 pipe inode 号配对读写端；`len < 4` 的短包过滤；事件统一为「公共头 + payload」结构（`ebpf/adr_event.h`，对应 `docs/ebpf-protocol.md`）。
 - 已实现 DNS 与 SNI 识别：分别通过 `udp_sendmsg` / `tcp_sendmsg` fentry 解析 qname 和 ClientHello 中的 SNI；iovec 读取兼容 `ITER_UBUF` 与 `ITER_IOVEC`。DoH/ECH 和跨多次发送的 TLS ClientHello 为已知盲区。
 - 已实现 EXIT/FORK 事件：`trace_exit` 上报退出码与存活时长并清理 taint；`trace_fork` 上报父/子 tgid。
+- 阶段 A（指纹采集层）新增 5 个 hook：`trace_openat`（tainted 全量 + 非 tainted 仅模型扩展名）、`trace_mmap`（PROT_EXEC + tainted）、`trace_connect`（仅 tainted）、`trace_bind` / `trace_listen`（全量），对应 FILE/NET 事件。
 - taint 继承用 `fentry/wake_up_new_task`（`task_alloc` 时机拿不到子 tgid，已从矩阵移除），key 用 `(tgid, group_leader->start_boottime)` 防 pid 复用并归并线程组。
 - LSM 拦截：`taint_deny_open` 对 tainted 进程打开哨兵文件返回 `-EPERM`（需内核 `lsm=bpf`）。
 - 用户态注入：agent 启动时扫描 `/proc`，按 comm 白名单为现有 Agent 进程标记 taint；可通过 `ADR_AGENT_WHITELIST` 扩展白名单。

@@ -6,11 +6,16 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/egress"
+	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/fingerprint"
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/rule"
 	"github.com/Zakura-Lee/GenAI-Agent-Sentinel/internal/store"
 )
@@ -43,6 +48,11 @@ func main() {
 		}
 	case "audit":
 		fmt.Println("ADR audit service starting...")
+	case "fingerprint":
+		if err := runFingerprint(); err != nil {
+			fmt.Fprintln(os.Stderr, "fingerprint 错误:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(1)
@@ -51,7 +61,25 @@ func main() {
 
 // usage 打印命令行用法并退出。
 func usage() {
-	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit|rules>")
+	fmt.Fprintln(os.Stderr, "用法: adr <server|agent|audit|rules|fingerprint>")
+}
+
+// runFingerprint 运行 AI 资产发现：定时扫描并输出 JSON，Ctrl+C 退出。
+func runFingerprint() error {
+	c := fingerprint.NewCollector()
+	if v := os.Getenv("ADR_FP_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			c.Interval = d
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	if err := c.Run(ctx, os.Stdout); err != nil && err != context.Canceled {
+		return err
+	}
+	return nil
 }
 
 // runAgent 加载 eBPF 程序集并循环打印捕获到的事件。
@@ -139,6 +167,10 @@ func runAgent() error {
 			printDNS(e)
 		case egress.EventTypeSNI:
 			printSNI(e)
+		case egress.EventTypeFile:
+			printFile(e)
+		case egress.EventTypeNet:
+			printNet(e)
 		default:
 			fmt.Printf("event type=%d pid=%d\n", e.Header.Type, e.Header.Pid)
 		}
@@ -381,6 +413,40 @@ func printExit(e *egress.Event) {
 // printFork 打印 FORK 事件。
 func printFork(e *egress.Event) {
 	fmt.Printf("fork ppid=%d child_pid=%d\n", e.Header.Pid, e.Fork.ChildPid)
+}
+
+// printFile 打印 FILE 事件（openat / mmap）。
+func printFile(e *egress.Event) {
+	p := e.File
+	op := "open"
+	if p.Op == 1 {
+		op = "mmap"
+	}
+	fmt.Printf("file op=%s pid=%d path=%s dirfd=%d flags=0x%x fd=%d len=%d\n",
+		op, e.Header.Pid, cstr(p.Path[:]), p.Dirfd, p.Flags, p.Fd, p.Len)
+}
+
+// printNet 打印 NET 事件（connect / bind / listen）。
+func printNet(e *egress.Event) {
+	p := e.Net
+	ops := []string{"connect", "bind", "listen"}
+	op := "unknown"
+	if int(p.Op) < len(ops) {
+		op = ops[p.Op]
+	}
+	fmt.Printf("net op=%s pid=%d family=%d port=%d fd=%d addr=%s\n",
+		op, e.Header.Pid, p.Family, p.Port, p.Fd, formatAddr(p.Family, p.Addr[:]))
+}
+
+// formatAddr 将 IPv4/IPv6 地址格式化为字符串。
+func formatAddr(family uint32, addr []byte) string {
+	if family == 2 && len(addr) >= 4 {
+		return net.IP(addr[:4]).String()
+	}
+	if family == 10 && len(addr) >= 16 {
+		return net.IP(addr[:16]).String()
+	}
+	return ""
 }
 
 // cstr 将定长字节数组转为 C 字符串（截断到首个 '\0'）。

@@ -4,7 +4,7 @@
 - **日期**：2026-11-16
 - **角色**：Zakura-Lee
 
-ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营平台**，融合 EDR / SIEM / SOAR 三类能力：
+ADR 是一个面向 **GenAI Agent 的安全运营**平台，融合 EDR / SIEM / SOAR 三类能力：
 
 - **EDR（GenAI Agent 专用）**：内核态用 eBPF 捕获 Agent 行为，规则引擎实时判定，支持多设备接入。
 - **SIEM**：多设备日志汇聚、存储、检索与**实时监测**，安全运营工程师在平台直接查看日志。
@@ -30,6 +30,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
 - ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
 - ✅ **阶段 2 核心实现**：本地 EXEC/PIPE/DNS/SNI 规则引擎、PostgreSQL 规则 CRUD、`adr rules` 命令和 agent 告警输出（终端 + `/tmp/adr-alerts.log`）；完整运行前需按规则说明配置 PostgreSQL。
+- ✅ **AI Agent 识别（阶段 A+B）**：eBPF 采集（openat/mmap/connect/bind/listen + SNI/DNS）+ `internal/fingerprint` 识别 Claude Code/Cursor/Codex 等 Harness 并推断厂商/模型版本，`adr fingerprint` 输出 JSON。
 
 ## 目录结构
 
@@ -39,6 +40,7 @@ ADR 是一个面向安全运营工程师的 **GenAI Agent 检测与响应运营�
 | `cmd/adr/` | 单入口（`server` / `agent` / `audit` / `rules` 子命令） | Go |
 | `internal/egress/` | eBPF 加载器与事件解析（cilium/ebpf） | Go |
 | `internal/rule/` | 本地规则模型与 expr 判定引擎 | Go |
+| `internal/fingerprint/` | AI Agent/Harness 识别 + 厂商/版本推断 | Go |
 | `internal/` 其余 | transport / store / soar / audit / web 骨架 | Go |
 | `frontend/` | 可视化前端 | React + TypeScript + Vite |
 | `db/` | 数据库 schema 与迁移 | PostgreSQL + pgvector |
@@ -70,6 +72,10 @@ go build -o /tmp/adr-agent ./cmd/adr
 sudo env "DATABASE_URL=$DATABASE_URL" /tmp/adr-agent agent
 #    可通过 ADR_AGENT_WHITELIST 扩展识别的 agent 进程名（逗号分隔）
 #    例如：sudo env "DATABASE_URL=$DATABASE_URL" ADR_AGENT_WHITELIST=my-agent /tmp/adr-agent agent
+
+# 6) AI Agent 识别（输出 JSON；Ctrl+C 退出）
+go run ./cmd/adr fingerprint
+#    可通过 ADR_FP_INTERVAL 调整扫描间隔（如 10s）
 ```
 
 告警同时追加写入 `/tmp/adr-alerts.log`；另开终端用 `sudo tail -f /tmp/adr-alerts.log` 查看。
@@ -96,4 +102,5 @@ sudo env "DATABASE_URL=$DATABASE_URL" /tmp/adr-agent agent
 | [`docs/DEPENDENCIES.md`](docs/DEPENDENCIES.md) | 环境依赖清单（系统 / Go / 前端 / 运行时） |
 | [`docs/ebpf-design.md`](docs/ebpf-design.md) | eBPF 层设计：观测 / LSM 拦截 / cgroup 重定向 hook 矩阵 |
 | [`docs/ebpf-protocol.md`](docs/ebpf-protocol.md) | eBPF 事件 ABI（map、事件头、payload、时序坑） |
+| [`docs/fingerprint-design.md`](docs/fingerprint-design.md) | AI Agent/Harness 识别：识别矩阵、厂商/版本推断、数据结构 |
 | [`Problem.md`](Problem.md) | 开发期间问题与解决方法记录 |

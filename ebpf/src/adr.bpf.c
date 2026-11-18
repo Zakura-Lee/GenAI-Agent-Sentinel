@@ -62,6 +62,107 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 		__builtin_memset(&hdr->taint, 0, sizeof(hdr->taint));
 }
 
+// is_tainted_current 判断当前进程是否已被标记为 taint（agent 进程）。
+static __always_inline int is_tainted_current(void)
+{
+	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
+	struct adr_taint_key key;
+
+	key.tgid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	key.pad = 0;
+	key.start_boottime = get_start_ticks(task);
+
+	return bpf_map_lookup_elem(&taints, &key) != NULL;
+}
+
+// is_model_ext 判断路径是否以常见模型文件扩展名结尾（n 为不含 NUL 的长度）。
+// 直接比较末尾字节，避免循环展开在 verifier 侧的偏差。
+static __always_inline int is_model_ext(const char *path, int n)
+{
+	if (n <= 0)
+		return 0;
+	if (n >= 5 && path[n - 5] == '.' && path[n - 4] == 'g' &&
+	    path[n - 3] == 'g' && path[n - 2] == 'u' && path[n - 1] == 'f')
+		return 1;
+	if (n >= 12 && path[n - 12] == '.' && path[n - 11] == 's' &&
+	    path[n - 10] == 'a' && path[n - 9] == 'f' && path[n - 8] == 'e' &&
+	    path[n - 7] == 't' && path[n - 6] == 'e' && path[n - 5] == 'n' &&
+	    path[n - 4] == 's' && path[n - 3] == 'o' && path[n - 2] == 'r' &&
+	    path[n - 1] == 's')
+		return 1;
+	if (n >= 5 && path[n - 5] == '.' && path[n - 4] == 'o' &&
+	    path[n - 3] == 'n' && path[n - 2] == 'n' && path[n - 1] == 'x')
+		return 1;
+	if (n >= 4 && path[n - 4] == '.' && path[n - 3] == 's' &&
+	    path[n - 2] == 'f' && path[n - 1] == 't')
+		return 1;
+	if (n >= 4 && path[n - 4] == '.' && path[n - 3] == 'p' &&
+	    path[n - 2] == 't' && path[n - 1] == 'h')
+		return 1;
+	if (n >= 3 && path[n - 3] == '.' && path[n - 2] == 'p' &&
+	    path[n - 1] == 't')
+		return 1;
+	if (n >= 3 && path[n - 3] == '.' && path[n - 2] == 'h' &&
+	    path[n - 1] == '5')
+		return 1;
+	return 0;
+}
+
+// report_file 上报 FILE 事件（op: 0=open, 1=mmap）。
+static __always_inline void report_file(__u32 op, __u32 dirfd, __u32 flags, __u32 fd, __u32 len, const char *path)
+{
+	__u32 size = sizeof(struct adr_event_header) + sizeof(struct adr_file_payload);
+	struct adr_event_header *hdr = bpf_ringbuf_reserve(&events, size, 0);
+	struct adr_file_payload *p;
+
+	if (!hdr)
+		return;
+
+	fill_common(hdr, ADR_EVENT_FILE);
+	hdr->ppid = 0;
+	hdr->uid = 0;
+	hdr->gid = 0;
+
+	p = (struct adr_file_payload *)((void *)hdr + sizeof(*hdr));
+	__builtin_memset(p, 0, sizeof(*p));
+	p->op = op;
+	p->dirfd = dirfd;
+	p->flags = flags;
+	p->fd = fd;
+	p->len = len;
+	if (path)
+		bpf_probe_read_kernel(p->path, sizeof(p->path), path);
+
+	bpf_ringbuf_submit(hdr, 0);
+}
+
+// report_net 上报 NET 事件（op: 0=connect, 1=bind, 2=listen）。
+static __always_inline void report_net(__u32 op, __u32 family, __u32 port, __u32 fd, const __u8 *addr)
+{
+	__u32 size = sizeof(struct adr_event_header) + sizeof(struct adr_net_payload);
+	struct adr_event_header *hdr = bpf_ringbuf_reserve(&events, size, 0);
+	struct adr_net_payload *p;
+
+	if (!hdr)
+		return;
+
+	fill_common(hdr, ADR_EVENT_NET);
+	hdr->ppid = 0;
+	hdr->uid = 0;
+	hdr->gid = 0;
+
+	p = (struct adr_net_payload *)((void *)hdr + sizeof(*hdr));
+	__builtin_memset(p, 0, sizeof(*p));
+	p->op = op;
+	p->family = family;
+	p->port = port;
+	p->fd = fd;
+	if (addr)
+		__builtin_memcpy(p->addr, addr, sizeof(p->addr));
+
+	bpf_ringbuf_submit(hdr, 0);
+}
+
 // read_slots 将用户态 char** 数组逐个读入固定大小槽位（verifier 友好的固定偏移）。
 // 遇到 NULL（数组结束）即停止，避免越界读到相邻数组（如 argv 之后紧邻的 envp）。
 static __always_inline void read_slots(char (*dst)[SLOT_SIZE], int max_slots, const char **vec)
@@ -487,5 +588,120 @@ int BPF_PROG(taint_deny_open, struct file *file)
 
 	if (is_sentinel_name(name))
 		return -EPERM;
+	return 0;
+}
+
+// trace_openat 观测文件打开：tainted 进程全量上报，其他进程只报模型扩展名。
+SEC("tracepoint/syscalls/sys_enter_openat")
+int trace_openat(struct trace_event_raw_sys_enter *ctx)
+{
+	const char *filename = (const char *)ctx->args[1];
+	__u32 dirfd = (__u32)ctx->args[0];
+	__u32 flags = (__u32)ctx->args[2];
+	char path[ADR_NAME_LEN];
+	long n;
+
+	__builtin_memset(path, 0, sizeof(path));
+	n = bpf_probe_read_user_str(path, sizeof(path), filename);
+	if (n <= 0)
+		return 0;
+
+	if (!is_tainted_current() && !is_model_ext(path, (int)(n - 1)))
+		return 0;
+
+	report_file(0, dirfd, flags, 0, 0, path);
+	return 0;
+}
+
+// trace_mmap 观测可执行内存映射（PROT_EXEC）：只上报 tainted 进程。
+SEC("tracepoint/syscalls/sys_enter_mmap")
+int trace_mmap(struct trace_event_raw_sys_enter *ctx)
+{
+	__u64 prot = ctx->args[2];
+	__u64 len = ctx->args[1];
+	__u64 fd = ctx->args[4];
+
+	if (!(prot & 0x4)) /* PROT_EXEC */
+		return 0;
+	if (!is_tainted_current())
+		return 0;
+
+	report_file(1, 0, (__u32)prot, (__u32)fd, (__u32)len, NULL);
+	return 0;
+}
+
+// read_sockaddr 读取用户态 sockaddr，填充 family/port/addr；返回 0 成功，-1 失败。
+static __always_inline int read_sockaddr(const void *sockaddr, __u32 *family, __u32 *port, __u8 *addr)
+{
+	__u16 f = 0;
+
+	if (bpf_probe_read_user(&f, sizeof(f), sockaddr) < 0)
+		return -1;
+	*family = f;
+
+	if (f == 2) { /* AF_INET */
+		struct sockaddr_in sin = {};
+
+		if (bpf_probe_read_user(&sin, sizeof(sin), sockaddr) < 0)
+			return -1;
+		*port = bpf_ntohs(sin.sin_port);
+		__builtin_memcpy(addr, &sin.sin_addr, 4);
+		return 0;
+	}
+	if (f == 10) { /* AF_INET6 */
+		struct sockaddr_in6 sin6 = {};
+
+		if (bpf_probe_read_user(&sin6, sizeof(sin6), sockaddr) < 0)
+			return -1;
+		*port = bpf_ntohs(sin6.sin6_port);
+		__builtin_memcpy(addr, &sin6.sin6_addr, 16);
+		return 0;
+	}
+	return -1;
+}
+
+// trace_connect 观测外联：只上报 tainted 进程。
+SEC("tracepoint/syscalls/sys_enter_connect")
+int trace_connect(struct trace_event_raw_sys_enter *ctx)
+{
+	const void *sockaddr = (const void *)ctx->args[1];
+	__u32 fd = (__u32)ctx->args[0];
+	__u32 family = 0;
+	__u32 port = 0;
+	__u8 addr[16] = {};
+
+	if (!is_tainted_current())
+		return 0;
+	if (read_sockaddr(sockaddr, &family, &port, addr) < 0)
+		return 0;
+
+	report_net(0, family, port, fd, addr);
+	return 0;
+}
+
+// trace_bind 观测监听端口绑定（全量）。
+SEC("tracepoint/syscalls/sys_enter_bind")
+int trace_bind(struct trace_event_raw_sys_enter *ctx)
+{
+	const void *sockaddr = (const void *)ctx->args[1];
+	__u32 fd = (__u32)ctx->args[0];
+	__u32 family = 0;
+	__u32 port = 0;
+	__u8 addr[16] = {};
+
+	if (read_sockaddr(sockaddr, &family, &port, addr) < 0)
+		return 0;
+
+	report_net(1, family, port, fd, addr);
+	return 0;
+}
+
+// trace_listen 观测监听开始（全量，确认 bind 后真的 listen）。
+SEC("tracepoint/syscalls/sys_enter_listen")
+int trace_listen(struct trace_event_raw_sys_enter *ctx)
+{
+	__u32 fd = (__u32)ctx->args[0];
+
+	report_net(2, 0, 0, fd, NULL);
 	return 0;
 }

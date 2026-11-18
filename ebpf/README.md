@@ -1,6 +1,6 @@
 # eBPF 内核态检测
 
-- **版本**：v0.1.1
+- **版本**：v0.1.2
 - **日期**：2026-11-02
 - **角色**：Zakura-Lee
 
@@ -15,6 +15,11 @@
 | `wake_up_new_task_entry` | fentry | taint 继承（key 用 `group_leader->start_boottime` 归并线程组） |
 | `trace_exit` | tracepoint | 上报 EXIT 事件 + 清理 taint（防 pid 复用串号） |
 | `trace_fork` | tracepoint | 上报 FORK 事件（父/子 tgid） |
+| `trace_openat` | tracepoint | 文件打开观测（tainted 全量 + 非 tainted 仅模型扩展名） |
+| `trace_mmap` | tracepoint | 可执行内存映射（PROT_EXEC + tainted） |
+| `trace_connect` | tracepoint | 外联观测（仅 tainted 进程） |
+| `trace_bind` | tracepoint | 监听端口绑定（全量） |
+| `trace_listen` | tracepoint | 监听开始（全量，确认 bind 后真正 listen） |
 | `taint_deny_open` | LSM | tainted 进程打开哨兵文件返回 `-EPERM` |
 
 - `adr_event.h`：事件 ABI（公共头 + payload），对应 `docs/ebpf-protocol.md`
