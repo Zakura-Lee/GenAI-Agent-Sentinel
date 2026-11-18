@@ -1,6 +1,6 @@
 # AI Agent/Harness 识别与模型厂商/版本推断
 
-- **版本**：v0.3.0
+- **版本**：v0.3.1
 - **日期**：2026-11-17
 - **角色**：Zakura-Lee
 
@@ -30,6 +30,7 @@
 | `continue` | `continue` | `~/.continue/config.json`、`.continue/` | `ANTHROPIC_API_KEY`、`OPENAI_API_KEY` |
 | `windsurf` | `windsurf` | `~/.codeium/windsurf/` | `CODEIUM_API_KEY` |
 | `zed` | `zed` | `~/.config/zed/settings.json`、`.zed/settings.json` | `ANTHROPIC_API_KEY`、`OPENAI_API_KEY` |
+| `reasonix-studio` | `reasonix-studio`、`reasonix studio` | `~/.reasonix/config.toml`、`~/.config/Reasonix Studio/` | `REASONIX_API_KEY` |
 
 匹配规则：comm 或 cmdline **小写包含**任一特征即命中；配置文件按 `~` 与进程 cwd 展开后检查存在性。
 
