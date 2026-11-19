@@ -1,10 +1,10 @@
 # 本地规则引擎使用说明
 
-- **版本**：v0.3.4
-- **日期**：2026-11-17
+- **版本**：v0.4.0
+- **日期**：2026-11-18
 - **角色**：ToFu
 
-阶段 2 的 agent 对 eBPF `EXEC`、`PIPE`、`DNS`、`SNI` 事件进行本地规则判定。规则保存在 PostgreSQL 中；规则新增或修改后，重启 agent 生效。本阶段只产生告警，不会终止进程或执行其他响应动作。
+阶段 2 的 agent 对 eBPF `EXEC`、`PIPE`、`DNS`、`SNI`、`FORK`、`EXIT`、`FILE`、`NET` 事件进行本地规则判定。规则保存在 PostgreSQL 中；规则新增或修改后，重启 agent 生效。本阶段只产生告警，不会终止进程或执行其他响应动作。
 
 ## 1. 初始化 PostgreSQL
 
@@ -28,6 +28,7 @@ CREATE DATABASE adr OWNER adr;
 export DATABASE_URL='postgres://adr:替换为强密码@127.0.0.1:5432/adr?sslmode=disable'
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/001_rules.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_rule_event_types.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_rule_event_types.sql
 ```
 
 密码若包含 `@`、`:`、`/` 等 URI 特殊字符，需要先进行 URL 编码。不要把生产密码提交到仓库。
@@ -48,10 +49,15 @@ go run ./cmd/adr rules add \
   --severity low \
   --expression 'Argv[0] matches "(^|/)sleep$"'
 
-# 添加 DNS / SNI / PIPE 测试规则
+# 添加 DNS / SNI / PIPE / FORK / EXIT / FILE / NET 测试规则
 go run ./cmd/adr rules add --id test-dns-example --name '测试 DNS 查询' --event-type DNS --severity low --expression 'Qname == "example.com"'
 go run ./cmd/adr rules add --id test-sni-example --name '测试 TLS SNI' --event-type SNI --severity low --expression 'ServerName == "example.com"'
 go run ./cmd/adr rules add --id test-pipe-write --name '测试管道写入' --event-type PIPE --severity low --expression 'Dir == "write" && Len >= 4'
+go run ./cmd/adr rules add --id test-fork --name '检测创建子进程' --event-type FORK --severity medium --expression 'ChildPID > 0'
+go run ./cmd/adr rules add --id test-exit-failure --name '检测异常退出' --event-type EXIT --severity medium --expression 'ExitCode != 0'
+go run ./cmd/adr rules add --id test-file-model --name '检测模型文件访问' --event-type FILE --severity high --expression 'Op == "open" && Path matches "(?i)\\.(gguf|safetensors|onnx)$"'
+go run ./cmd/adr rules add --id test-net-connect --name '检测外联' --event-type NET --severity high --expression 'Op == "connect" && Port == 443'
+go run ./cmd/adr rules add --id test-net-listen --name '检测开始监听' --event-type NET --severity low --expression 'Op == "listen"'
 
 # 确认规则均已保存；list 会包含启用和禁用的规则
 go run ./cmd/adr rules list
@@ -78,6 +84,10 @@ go run ./cmd/adr rules delete --id test-sleep
 | `PIPE` | `PID`、`PPID`、`UID`、`GID`、`Ino`、`Len`、`Dir`、`Data` | 管道进程信息、inode、方向（`read`/`write`）、长度及最多 128 字节的数据 |
 | `DNS` | `PID`、`PPID`、`UID`、`GID`、`Qname` | DNS 查询进程信息及查询域名 |
 | `SNI` | `PID`、`PPID`、`UID`、`GID`、`ServerName` | TLS 连接进程信息及 ClientHello 中的 SNI |
+| `FORK` | `PID`、`PPID`、`UID`、`GID`、`ChildPID`、`CloneFlags` | 创建子进程的父进程信息和子进程 PID |
+| `EXIT` | `PID`、`PPID`、`UID`、`GID`、`ExitCode`、`DurationNS` | 退出进程及内核运行时长（纳秒） |
+| `FILE` | `PID`、`PPID`、`UID`、`GID`、`Op`、`Dirfd`、`Flags`、`Fd`、`Len`、`Path` | `openat` 或可执行 `mmap`；操作为 `open`/`mmap` |
+| `NET` | `PID`、`PPID`、`UID`、`GID`、`Op`、`Family`、`Port`、`Fd`、`Addr` | `connect`/`bind`/`listen`；地址、端口和操作类型 |
 
 示例：
 
@@ -88,9 +98,13 @@ PID == 1234 && Argv[0] matches "(^|/)sleep$"
 Dir == "write" && Len > 0
 Qname == "example.com"
 ServerName == "example.com"
+ChildPID > 0
+ExitCode != 0 && DurationNS < 1000000000
+Op == "open" && Dirfd == -100 && Path matches "(?i)\\.(gguf|safetensors|onnx)$"
+Op == "connect" && Port == 443 && Addr == "203.0.113.8"
 ```
 
-eBPF 在 `sys_enter_execve` 读取事件，此时新程序映像还没有替换当前进程，因此 `Comm == "sleep"` 通常不会匹配从 shell 启动的 `sleep`。检测目标命令应优先依据 `Argv[0]` 编写规则。固定槽位会截断较长参数；`Argv` 不是完整、规范化或可信的可执行文件路径。PIPE 的 `Data` 可能含有敏感管道内容，规则可以访问但告警不会输出它。`EXIT`、`FORK` 尚未接入规则引擎；当前字段也不包含父进程路径或文件系统路径。
+eBPF 在 `sys_enter_execve` 读取事件，此时新程序映像还没有替换当前进程，因此 `Comm == "sleep"` 通常不会匹配从 shell 启动的 `sleep`。检测目标命令应优先依据 `Argv[0]` 编写规则。固定槽位会截断较长参数；`Argv` 不是完整、规范化或可信的可执行文件路径。PIPE 的 `Data` 可能含有敏感管道内容，规则可以访问但告警不会输出它。`FORK` 的 `CloneFlags` 当前固定为 0；`FILE` 中 `Dirfd` 是有符号值（`AT_FDCWD` 为 -100），`mmap` 事件没有路径；`NET` 的 `listen` 事件不包含地址/端口。eBPF 当前将 `EXIT`、`FORK`、`FILE`、`NET` 的 PPID/UID/GID 填为 0，规则不应依赖这些字段。文件路径来自 `openat` 参数，可能是相对路径。
 
 ## 4. 运行 agent 并验证告警
 
@@ -108,6 +122,20 @@ sudo env "DATABASE_URL=$DATABASE_URL" /tmp/adr-agent agent
 # EXEC：已有 test-sleep 规则时触发
 sleep 1
 
+# FORK：启动外部命令会创建子进程
+sleep 1
+
+# EXIT：子 shell 进程以非零状态退出，匹配 ExitCode != 0
+sh -c 'exit 1'
+
+# FILE：打开受支持模型扩展名的临时文件；非 tainted 进程只上报这些扩展名
+: > /tmp/adr-rule-test.gguf
+cat /tmp/adr-rule-test.gguf >/dev/null
+rm -f /tmp/adr-rule-test.gguf
+
+# NET：本地绑定并开始监听；不需要访问外网
+python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(1); s.close()'
+
 # PIPE：传输长度大于 eBPF 的最小捕获长度
 printf 'pipe-test-data\n' | cat >/dev/null
 
@@ -118,12 +146,22 @@ getent ahostsv4 example.com
 curl --noproxy '*' --connect-timeout 5 --max-time 10 -I https://example.com
 ```
 
-若相应规则已启用且事件被内核捕获，agent 应打印对应规则 ID 的告警（`test-sleep`、`test-pipe-write`、`test-dns-example`、`test-sni-example`）。DNS 查询可能被本机缓存；若没有 DNS 告警，可在 `curl` 命令触发解析，或在系统安装了 `dig` 时执行 `dig example.com`。也可用 `dig @<DNS服务器地址> example.com` 直接发起 UDP DNS 查询。SNI 告警需要成功建立 TLS 连接并在可见的 ClientHello 中带有 SNI；DoH/ECH 等方式可能无法识别。DNS/SNI 测试需要网络及相应工具；curl 直连失败时，需在允许出站 HTTPS 的网络中测试。事件头中的 `TsNs` 是内核启动后的单调时钟纳秒值，告警按 `ts_ns` 输出，不将它错误解释为日历时间。
+若相应规则已启用且事件被内核捕获，agent 应打印对应规则 ID 的告警：`sleep 1` 可触发 `test-sleep` 和 `test-fork`；其他命令可触发 `test-exit-failure`、`test-file-model`、`test-net-listen`、`test-pipe-write`、`test-dns-example` 和 `test-sni-example`。`sleep` 进程正常退出也会产生 EXIT 事件，但不会匹配 `ExitCode != 0`。
+
+当前 FILE 的 `open` 事件对普通（非 tainted）进程只上报模型文件扩展名；可用 `.gguf`、`.safetensors`、`.onnx`、`.sft`、`.pth`、`.pt` 或 `.h5` 测试。`mmap` 事件只对 tainted 进程上报。NET 的 `connect` 事件也只对 tainted 进程上报，因此普通 `curl` 不一定触发 `test-net-connect`；上述本地 socket 命令触发的 `listen` 则是全量上报。`bind` 和 `listen` 都会产生 NET 事件；`listen` 事件不带地址和端口。
+
+DNS 查询可能被本机缓存；若没有 DNS 告警，可在 `curl` 命令触发解析，或在系统安装了 `dig` 时执行 `dig example.com`。也可用 `dig @<DNS服务器地址> example.com` 直接发起 UDP DNS 查询。SNI 告警需要成功建立 TLS 连接并在可见的 ClientHello 中带有 SNI；DoH/ECH 等方式可能无法识别。DNS/SNI 测试需要网络及相应工具；curl 直连失败时，需在允许出站 HTTPS 的网络中测试。事件头中的 `TsNs` 是内核启动后的单调时钟纳秒值，告警按 `ts_ns` 输出，不将它错误解释为日历时间。
 
 agent 会继续在终端输出告警，并将**告警行**追加写入 `/tmp/adr-alerts.log`；其他普通事件不会写进该文件。查看文件：
 
 ```bash
 sudo tail -f /tmp/adr-alerts.log
+```
+
+清空已有日志内容（保留文件；agent 继续运行时会继续追加）：
+
+```bash
+sudo truncate -s 0 /tmp/adr-alerts.log
 ```
 
 可通过 `ADR_ALERT_LOG` 指定其他路径。使用 sudo 启动时也要传入该变量，例如：

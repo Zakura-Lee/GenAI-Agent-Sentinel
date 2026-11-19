@@ -29,7 +29,7 @@ ADR 是一个面向 **GenAI Agent 的安全运营**平台，融合 EDR / SIEM / 
 - ✅ **eBPF 层**（阶段 1 扩展）：execve 观测（argv/envp 固定槽位）、MCP pipe 关联、DNS/SNI 识别、taint 继承、LSM 拦截。
 - ✅ **taint 验证**：孙子进程被拦截、线程归并、孤儿仍 tainted、无关进程不受影响。
 - ✅ **用户态注入**：agent 启动扫描 `/proc`，按 comm 白名单标记 Agent 进程（`ADR_AGENT_WHITELIST` 可扩展）。
-- ✅ **阶段 2 核心实现**：本地 EXEC/PIPE/DNS/SNI 规则引擎、PostgreSQL 规则 CRUD、`adr rules` 命令和 agent 告警输出（终端 + `/tmp/adr-alerts.log`）；完整运行前需按规则说明配置 PostgreSQL。
+- ✅ **阶段 2 核心实现**：本地 EXEC/PIPE/DNS/SNI/FORK/EXIT/FILE/NET 规则引擎、PostgreSQL 规则 CRUD、`adr rules` 命令和 agent 告警输出（终端 + `/tmp/adr-alerts.log`）；完整运行前需按规则说明配置 PostgreSQL。
 - ✅ **AI Agent 识别（阶段 A+B）**：eBPF 采集（openat/mmap/connect/bind/listen + SNI/DNS）+ `internal/fingerprint` 识别 Claude Code/Cursor/Codex 等 Harness 并推断厂商/模型版本，`adr fingerprint` 输出 JSON。
 
 ## 目录结构
@@ -60,6 +60,7 @@ sudo ./setup.sh
 export DATABASE_URL='postgres://adr:替换为强密码@127.0.0.1:5432/adr?sslmode=disable'
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/001_rules.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_rule_event_types.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_rule_event_types.sql
 
 # 3) 构建 eBPF 程序（生成 vmlinux.h + 编译 adr.bpf.o）
 make build-ebpf

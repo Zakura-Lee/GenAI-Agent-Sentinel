@@ -317,6 +317,85 @@ func toRuleEvent(e *egress.Event) (rule.Event, error) {
 			GID:        e.Header.Gid,
 			ServerName: cstr(e.Sni.ServerName[:]),
 		}
+	case egress.EventTypeFork:
+		if e.Fork == nil {
+			return rule.Event{}, fmt.Errorf("FORK 事件缺少 payload")
+		}
+		event.Type = rule.EventTypeFork
+		event.Fork = &rule.ForkEvent{
+			PID:        e.Header.Pid,
+			PPID:       e.Header.Ppid,
+			UID:        e.Header.Uid,
+			GID:        e.Header.Gid,
+			ChildPID:   e.Fork.ChildPid,
+			CloneFlags: e.Fork.CloneFlags,
+		}
+	case egress.EventTypeExit:
+		if e.Exit == nil {
+			return rule.Event{}, fmt.Errorf("EXIT 事件缺少 payload")
+		}
+		event.Type = rule.EventTypeExit
+		event.Exit = &rule.ExitEvent{
+			PID:        e.Header.Pid,
+			PPID:       e.Header.Ppid,
+			UID:        e.Header.Uid,
+			GID:        e.Header.Gid,
+			ExitCode:   e.Exit.ExitCode,
+			DurationNS: e.Exit.DurationNs,
+		}
+	case egress.EventTypeFile:
+		if e.File == nil {
+			return rule.Event{}, fmt.Errorf("FILE 事件缺少 payload")
+		}
+		op := ""
+		switch e.File.Op {
+		case 0:
+			op = "open"
+		case 1:
+			op = "mmap"
+		default:
+			return rule.Event{}, fmt.Errorf("FILE 操作类型无效: %d", e.File.Op)
+		}
+		event.Type = rule.EventTypeFile
+		event.File = &rule.FileEvent{
+			PID:   e.Header.Pid,
+			PPID:  e.Header.Ppid,
+			UID:   e.Header.Uid,
+			GID:   e.Header.Gid,
+			Op:    op,
+			Dirfd: int32(e.File.Dirfd),
+			Flags: e.File.Flags,
+			Fd:    e.File.Fd,
+			Len:   e.File.Len,
+			Path:  cstr(e.File.Path[:]),
+		}
+	case egress.EventTypeNet:
+		if e.Net == nil {
+			return rule.Event{}, fmt.Errorf("NET 事件缺少 payload")
+		}
+		op := ""
+		switch e.Net.Op {
+		case 0:
+			op = "connect"
+		case 1:
+			op = "bind"
+		case 2:
+			op = "listen"
+		default:
+			return rule.Event{}, fmt.Errorf("NET 操作类型无效: %d", e.Net.Op)
+		}
+		event.Type = rule.EventTypeNet
+		event.Net = &rule.NetEvent{
+			PID:    e.Header.Pid,
+			PPID:   e.Header.Ppid,
+			UID:    e.Header.Uid,
+			GID:    e.Header.Gid,
+			Op:     op,
+			Family: e.Net.Family,
+			Port:   e.Net.Port,
+			Fd:     e.Net.Fd,
+			Addr:   formatAddr(e.Net.Family, e.Net.Addr[:]),
+		}
 	}
 	return event, nil
 }

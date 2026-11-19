@@ -132,6 +132,40 @@ func TestEngineEvaluatesPipeDNSAndSNI(t *testing.T) {
 	}
 }
 
+func TestEngineEvaluatesForkExitFileAndNet(t *testing.T) {
+	engine, err := NewEngine([]Rule{
+		{ID: "fork-child", Name: "fork child", Enabled: true, EventType: EventTypeFork, Severity: "low", Expression: `ChildPID == 404`, Source: "local"},
+		{ID: "exit-failure", Name: "exit failure", Enabled: true, EventType: EventTypeExit, Severity: "medium", Expression: `ExitCode != 0 && DurationNS > 100`, Source: "local"},
+		{ID: "file-open", Name: "file open", Enabled: true, EventType: EventTypeFile, Severity: "high", Expression: `Op == "open" && Dirfd == -100 && Path == "/tmp/secret.key"`, Source: "local"},
+		{ID: "net-connect", Name: "net connect", Enabled: true, EventType: EventTypeNet, Severity: "critical", Expression: `Op == "connect" && Port == 443 && Addr == "203.0.113.8"`, Source: "local"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		event Event
+		id    string
+	}{
+		{name: "fork", event: Event{Type: EventTypeFork, Fork: &ForkEvent{PID: 20, ChildPID: 404}}, id: "fork-child"},
+		{name: "exit", event: Event{Type: EventTypeExit, Exit: &ExitEvent{PID: 21, ExitCode: 1, DurationNS: 200}}, id: "exit-failure"},
+		{name: "file", event: Event{Type: EventTypeFile, File: &FileEvent{PID: 22, Op: "open", Dirfd: -100, Path: "/tmp/secret.key"}}, id: "file-open"},
+		{name: "net", event: Event{Type: EventTypeNet, Net: &NetEvent{PID: 23, Op: "connect", Port: 443, Addr: "203.0.113.8"}}, id: "net-connect"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			alerts, err := engine.Evaluate(tc.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(alerts) != 1 || alerts[0].RuleID != tc.id || alerts[0].PID == 0 || alerts[0].Subject == "" {
+				t.Fatalf("got alerts %+v, want matching rule %s with process details", alerts, tc.id)
+			}
+		})
+	}
+}
+
 func TestNewEngineRejectsInvalidRules(t *testing.T) {
 	cases := []struct {
 		name string
@@ -139,7 +173,7 @@ func TestNewEngineRejectsInvalidRules(t *testing.T) {
 	}{
 		{name: "unknown field", rule: testRule("bad-field", `Missing == "x"`, true)},
 		{name: "invalid expression", rule: testRule("bad-syntax", `Comm ==`, true)},
-		{name: "unsupported event", rule: Rule{ID: "bad-event", Name: "bad", Enabled: true, EventType: "EXIT", Severity: "low", Expression: "true", Source: "local"}},
+		{name: "unsupported event", rule: Rule{ID: "bad-event", Name: "bad", Enabled: true, EventType: "UNKNOWN", Severity: "low", Expression: "true", Source: "local"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,7 +209,10 @@ func TestEngineRejectsMissingTypedPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, eventType := range []string{EventTypePipe, EventTypeDNS, EventTypeSNI} {
+	for _, eventType := range []string{
+		EventTypePipe, EventTypeDNS, EventTypeSNI,
+		EventTypeFork, EventTypeExit, EventTypeFile, EventTypeNet,
+	} {
 		t.Run(eventType, func(t *testing.T) {
 			if _, err := engine.Evaluate(Event{Type: eventType}); err == nil {
 				t.Fatalf("Evaluate(%s) succeeded without payload", eventType)
@@ -189,7 +226,7 @@ func TestEngineIgnoresUnsupportedEvent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	alerts, err := engine.Evaluate(Event{Type: "FORK"})
+	alerts, err := engine.Evaluate(Event{Type: "UNKNOWN"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -36,7 +36,7 @@
 - `db/schema.sql` 目前只有 events 表；`db/migrations` 尚无实际迁移。
 - `go.mod` 已有 pgx 依赖，尚未引入表达式引擎。
 
-当前规则引擎支持已有 Go payload 解析的 `EXEC`、`PIPE`、`DNS`、`SNI` 事件。`EXIT`、`FORK` 尚无 Go payload 解析，因此不允许为它们创建规则。EXEC 规则输入不暴露原始 `Envp`；PIPE 规则可访问截断的 `Data`，启用相关规则前需确认数据敏感性。
+当前规则引擎支持 `EXEC`、`PIPE`、`DNS`、`SNI`、`FORK`、`EXIT`、`FILE`、`NET` 事件。EXEC 规则输入不暴露原始 `Envp`；PIPE 规则可访问截断的 `Data`，启用相关规则前需确认数据敏感性；各新增事件的字段限制见 [`docs/rules.md`](rules.md)。
 
 ## 3. 规则格式与执行模型
 
@@ -196,7 +196,7 @@ agent 启动时连接本机配置的 PostgreSQL，读取启用规则并编译。
 
 导入流程应包括：选择候选规则、确认许可证和来源、检查所需遥测字段是否存在、转换表达式、用正常与异常样例测试、审核误报后再启用。不要在 agent 运行时无审核地自动拉取并执行远程规则。
 
-Sigma、Elastic 和 Falco 规则可用于丰富规则来源，但本项目目前只采集有限的 EXEC/PIPE/DNS/SNI 字段；字段缺失时，外部规则无法可靠匹配。阶段 2 可先手工编写少量项目规则并留好 `source` 元数据，随后再实现经过审核的导入/转换工具。
+Sigma、Elastic 和 Falco 规则可用于丰富规则来源，但本项目目前只采集有限的 EXEC/PIPE/DNS/SNI/FORK/EXIT/FILE/NET 字段；字段缺失时，外部规则无法可靠匹配。阶段 2 可先手工编写少量项目规则并留好 `source` 元数据，随后再实现经过审核的导入/转换工具。
 
 ## 7. 阶段完成判定
 

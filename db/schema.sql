@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS rules (
     name        TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
-    event_type  TEXT NOT NULL CHECK (event_type IN ('EXEC', 'PIPE', 'DNS', 'SNI')),
+    event_type  TEXT NOT NULL CHECK (event_type IN ('EXEC', 'PIPE', 'DNS', 'SNI', 'FORK', 'EXIT', 'FILE', 'NET')),
     severity    TEXT NOT NULL CHECK (severity IN ('low', 'medium', 'high', 'critical')),
     expression  TEXT NOT NULL,
     source      TEXT NOT NULL,

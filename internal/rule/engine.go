@@ -20,6 +20,14 @@ const (
 	EventTypeDNS = "DNS"
 	// EventTypeSNI 表示 TLS SNI 事件。
 	EventTypeSNI = "SNI"
+	// EventTypeFork 表示进程创建事件。
+	EventTypeFork = "FORK"
+	// EventTypeExit 表示进程退出事件。
+	EventTypeExit = "EXIT"
+	// EventTypeFile 表示文件访问或可执行内存映射事件。
+	EventTypeFile = "FILE"
+	// EventTypeNet 表示网络连接或监听事件。
+	EventTypeNet = "NET"
 
 	maxRules          = 1000
 	maxExpressionSize = 4096
@@ -85,6 +93,53 @@ type SNIEvent struct {
 	ServerName string
 }
 
+// ForkEvent 是规则可见的进程创建事件字段。
+type ForkEvent struct {
+	PID        uint32
+	PPID       uint32
+	UID        uint32
+	GID        uint32
+	ChildPID   uint32
+	CloneFlags uint64
+}
+
+// ExitEvent 是规则可见的进程退出事件字段。
+type ExitEvent struct {
+	PID        uint32
+	PPID       uint32
+	UID        uint32
+	GID        uint32
+	ExitCode   uint32
+	DurationNS uint64
+}
+
+// FileEvent 是规则可见的文件访问或可执行映射事件字段。
+type FileEvent struct {
+	PID   uint32
+	PPID  uint32
+	UID   uint32
+	GID   uint32
+	Op    string
+	Dirfd int32
+	Flags uint32
+	Fd    uint32
+	Len   uint32
+	Path  string
+}
+
+// NetEvent 是规则可见的网络连接或监听事件字段。
+type NetEvent struct {
+	PID    uint32
+	PPID   uint32
+	UID    uint32
+	GID    uint32
+	Op     string
+	Family uint32
+	Port   uint32
+	Fd     uint32
+	Addr   string
+}
+
 // Event 是交给规则引擎的标准化事件。
 type Event struct {
 	Type        string
@@ -93,6 +148,10 @@ type Event struct {
 	Pipe        *PipeEvent
 	DNS         *DNSEvent
 	SNI         *SNIEvent
+	Fork        *ForkEvent
+	Exit        *ExitEvent
+	File        *FileEvent
+	Net         *NetEvent
 }
 
 // Alert 表示命中规则后产生的本地告警。
@@ -129,7 +188,8 @@ func Validate(r Rule) error {
 		return errors.New("规则名称不能为空")
 	}
 	switch r.EventType {
-	case EventTypeExec, EventTypePipe, EventTypeDNS, EventTypeSNI:
+	case EventTypeExec, EventTypePipe, EventTypeDNS, EventTypeSNI,
+		EventTypeFork, EventTypeExit, EventTypeFile, EventTypeNet:
 	default:
 		return fmt.Errorf("不支持的事件类型 %q", r.EventType)
 	}
@@ -176,6 +236,14 @@ func expressionEnvironment(eventType string) (any, error) {
 		return DNSEvent{}, nil
 	case EventTypeSNI:
 		return SNIEvent{}, nil
+	case EventTypeFork:
+		return ForkEvent{}, nil
+	case EventTypeExit:
+		return ExitEvent{}, nil
+	case EventTypeFile:
+		return FileEvent{}, nil
+	case EventTypeNet:
+		return NetEvent{}, nil
 	default:
 		return nil, fmt.Errorf("不支持的事件类型 %q", eventType)
 	}
@@ -247,6 +315,34 @@ func (e *Engine) Evaluate(event Event) ([]Alert, error) {
 		}
 		payload = *event.SNI
 		pid, ppid, subject = event.SNI.PID, event.SNI.PPID, event.SNI.ServerName
+	case EventTypeFork:
+		if event.Fork == nil {
+			return nil, errors.New("FORK 事件缺少进程数据")
+		}
+		payload = *event.Fork
+		pid, ppid = event.Fork.PID, event.Fork.PPID
+		subject = fmt.Sprintf("child_pid=%d", event.Fork.ChildPID)
+	case EventTypeExit:
+		if event.Exit == nil {
+			return nil, errors.New("EXIT 事件缺少进程数据")
+		}
+		payload = *event.Exit
+		pid, ppid = event.Exit.PID, event.Exit.PPID
+		subject = fmt.Sprintf("exit_code=%d duration_ns=%d", event.Exit.ExitCode, event.Exit.DurationNS)
+	case EventTypeFile:
+		if event.File == nil {
+			return nil, errors.New("FILE 事件缺少文件数据")
+		}
+		payload = *event.File
+		pid, ppid = event.File.PID, event.File.PPID
+		subject = fmt.Sprintf("op=%s path=%q fd=%d len=%d", event.File.Op, event.File.Path, event.File.Fd, event.File.Len)
+	case EventTypeNet:
+		if event.Net == nil {
+			return nil, errors.New("NET 事件缺少网络数据")
+		}
+		payload = *event.Net
+		pid, ppid = event.Net.PID, event.Net.PPID
+		subject = fmt.Sprintf("op=%s addr=%s port=%d fd=%d", event.Net.Op, event.Net.Addr, event.Net.Port, event.Net.Fd)
 	default:
 		return nil, nil
 	}
