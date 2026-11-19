@@ -38,13 +38,13 @@ struct {
 	__type(value, struct adr_taint);
 } taints SEC(".maps");
 
-// fill_common 填充事件公共头的通用字段（ts_ns/type/pid/reserved/taint）。
-// ppid/uid/gid 由调用方自行填充。
+// fill_common 填充事件公共头的通用字段（ts_ns/type/pid/ppid/uid/gid/reserved/taint）。
 static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type)
 {
 	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 	struct adr_taint_key key;
 	struct adr_taint *t;
+	__u64 uid_gid = bpf_get_current_uid_gid();
 
 	key.tgid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 	key.pad = 0;
@@ -53,6 +53,9 @@ static __always_inline void fill_common(struct adr_event_header *hdr, __u32 type
 	hdr->ts_ns = bpf_ktime_get_ns();
 	hdr->type = type;
 	hdr->pid = key.tgid;
+	hdr->ppid = (__u32)BPF_CORE_READ(task, real_parent, tgid);
+	hdr->uid = (__u32)(uid_gid & 0xffffffff);
+	hdr->gid = (__u32)(uid_gid >> 32);
 	hdr->reserved = 0;
 
 	t = bpf_map_lookup_elem(&taints, &key);
@@ -119,9 +122,6 @@ static __always_inline void report_file(__u32 op, __u32 dirfd, __u32 flags, __u3
 		return;
 
 	fill_common(hdr, ADR_EVENT_FILE);
-	hdr->ppid = 0;
-	hdr->uid = 0;
-	hdr->gid = 0;
 
 	p = (struct adr_file_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(p, 0, sizeof(*p));
@@ -147,9 +147,6 @@ static __always_inline void report_net(__u32 op, __u32 family, __u32 port, __u32
 		return;
 
 	fill_common(hdr, ADR_EVENT_NET);
-	hdr->ppid = 0;
-	hdr->uid = 0;
-	hdr->gid = 0;
 
 	p = (struct adr_net_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(p, 0, sizeof(*p));
@@ -200,9 +197,6 @@ static __always_inline int handle_pipe_io(struct file *file, const char *buf, si
 		return 0;
 
 	fill_common(hdr, ADR_EVENT_PIPE);
-	hdr->ppid = 0;
-	hdr->uid = 0;
-	hdr->gid = 0;
 
 	struct adr_pipe_payload *p = (struct adr_pipe_payload *)((void *)hdr + sizeof(*hdr));
 	p->ino = ino;
@@ -220,9 +214,6 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
 	struct adr_event_header *hdr;
 	struct adr_exec_payload *payload;
-	struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	__u64 uid_gid = bpf_get_current_uid_gid();
 	__u32 size = sizeof(*hdr) + sizeof(*payload);
 
 	hdr = bpf_ringbuf_reserve(&events, size, 0);
@@ -230,9 +221,6 @@ int trace_execve(struct trace_event_raw_sys_enter *ctx)
 		return 0;
 
 	fill_common(hdr, ADR_EVENT_EXEC);
-	hdr->ppid = (__u32)BPF_CORE_READ(task, real_parent, tgid);
-	hdr->uid = (__u32)(uid_gid & 0xffffffff);
-	hdr->gid = (__u32)(uid_gid >> 32);
 
 	payload = (struct adr_exec_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(payload, 0, sizeof(*payload));
@@ -298,9 +286,6 @@ static __always_inline int handle_dns(const char *dns, long remain)
 		return 0;
 
 	fill_common(hdr, ADR_EVENT_DNS);
-	hdr->ppid = 0;
-	hdr->uid = 0;
-	hdr->gid = 0;
 
 	struct adr_dns_payload *p = (struct adr_dns_payload *)((void *)hdr + sizeof(*hdr));
 	__builtin_memset(p, 0, sizeof(*p));
@@ -414,9 +399,6 @@ static __always_inline int handle_tls_sni(const char *data, long len)
 				return 0;
 
 			fill_common(hdr, ADR_EVENT_SNI);
-			hdr->ppid = 0;
-			hdr->uid = 0;
-			hdr->gid = 0;
 
 			struct adr_sni_payload *p = (struct adr_sni_payload *)((void *)hdr + sizeof(*hdr));
 			bpf_probe_read_user(p->server_name, name_len, data + off + 4 + 5);
@@ -495,9 +477,6 @@ int trace_exit(struct trace_event_raw_sched_process_exit *ctx)
 	hdr = bpf_ringbuf_reserve(&events, size, 0);
 	if (hdr) {
 		fill_common(hdr, ADR_EVENT_EXIT);
-		hdr->ppid = 0;
-		hdr->uid = 0;
-		hdr->gid = 0;
 
 		p = (struct adr_exit_payload *)((void *)hdr + sizeof(*hdr));
 		p->exit_code = (__u32)BPF_CORE_READ(task, exit_code);
@@ -531,9 +510,6 @@ int trace_fork(struct trace_event_raw_sched_process_fork *ctx)
 		return 0;
 
 	fill_common(hdr, ADR_EVENT_FORK);
-	hdr->ppid = 0;
-	hdr->uid = 0;
-	hdr->gid = 0;
 
 	p = (struct adr_fork_payload *)((void *)hdr + sizeof(*hdr));
 	p->child_pid = (__u32)ctx->child_pid;

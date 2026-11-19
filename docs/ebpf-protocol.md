@@ -1,6 +1,6 @@
 # eBPF 层协议 v0
 
-- **版本**：v0.1.4
+- **版本**：v0.1.5
 - **日期**：2026-11-01
 - **角色**：Zakura-Lee
 - **状态**：草案（MCP pipe 与 taint 继承共同引用）
@@ -38,13 +38,15 @@ struct adr_event_header {
     __u64 ts_ns;             // 时间戳 bpf_ktime_get_ns()
     __u32 type;              // adr_event_type
     __u32 pid;               // 进程 id（tgid）
-    __u32 ppid;              // 父进程 id
+    __u32 ppid;              // 父进程 id（real_parent 的 tgid）
     __u32 uid;
     __u32 gid;
     __u32 reserved;          // 保留，置 0
     struct adr_taint taint;  // 污点信息（32 字节）
 };
 ```
+
+> `pid/ppid/uid/gid` 由 `fill_common` **统一填充**（`pid=tgid`、`ppid=real_parent.tgid`、`uid/gid` 来自 `bpf_get_current_uid_gid()`），**所有事件类型都携带**，不再由调用方各自赋值。
 
 ### 3.3 污点结构（32 字节，8 对齐）
 
